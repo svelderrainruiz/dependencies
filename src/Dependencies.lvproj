@@ -122,7 +122,8 @@
 				<Property Name="NIPKG_certificates" Type="Bool">true</Property>
 				<Property Name="NIPKG_createInstaller" Type="Bool">true</Property>
 				<Property Name="NIPKG_feedLocation" Type="Path">/C/Users/Public/Documents/svelderrainruiz/Feed</Property>
-				<Property Name="NIPKG_installerArtifacts" Type="Str">Install.exe|InstallCHS.dll|InstallDEU.dll|InstallFRA.dll|InstallJPN.dll|InstallKOR.dll|bin|feeds|pool|system-packages
+				<Property Name="NIPKG_installerArtifacts" Type="Str">Install.exe|InstallCHS.dll|InstallDEU.dll|InstallFRA.dll|InstallJPN.dll|InstallKOR.dll|bin|feeds|pool|system-packages
+
 </Property>
 				<Property Name="NIPKG_installerBuiltBefore" Type="Bool">true</Property>
 				<Property Name="NIPKG_installerDestination" Type="Path">/C/Users/Public/Documents/svelderrainruiz/builds/Package Installer</Property>
@@ -189,24 +190,24 @@
 				<Property Name="Bld_excludeLibraryItems" Type="Bool">true</Property>
 				<Property Name="Bld_excludePolymorphicVIs" Type="Bool">true</Property>
 				<Property Name="Bld_excludeTypedefs" Type="Bool">true</Property>
-				<Property Name="Bld_localDestDir" Type="Path">/C/Users/Public/Documents/VITechnologies</Property>
+				<Property Name="Bld_localDestDir" Type="Path">/C/Users/Public/Documents/svelderrainruiz</Property>
 				<Property Name="Bld_modifyLibraryFile" Type="Bool">true</Property>
 				<Property Name="Bld_previewCacheID" Type="Str">{49E36C7A-4D0D-4691-9530-BCC325C9BE2C}</Property>
-				<Property Name="Bld_sbomFile" Type="Path">/C/Users/Public/Documents/VITechnologies/Dependencies_lba-plugins-dependencies-ppl.cdx.sbom.json</Property>
-				<Property Name="Bld_userLogFile" Type="Path">/C/Users/Public/Documents/VITechnologies/Dependencies_lba-plugins-dependencies-ppl_log.txt</Property>
-				<Property Name="Bld_version.build" Type="Int">3</Property>
+				<Property Name="Bld_sbomFile" Type="Path">/C/Users/Public/Documents/svelderrainruiz/Dependencies_lba-plugins-dependencies-ppl.cdx.sbom.json</Property>
+				<Property Name="Bld_userLogFile" Type="Path">/C/Users/Public/Documents/svelderrainruiz/Dependencies_lba-plugins-dependencies-ppl_log.txt</Property>
+				<Property Name="Bld_version.build" Type="Int">4</Property>
 				<Property Name="Bld_version.major" Type="Int">1</Property>
-				<Property Name="Destination[0].destName" Type="Str">lba-plugins-dependencies.lvlibp</Property>
-				<Property Name="Destination[0].path" Type="Path">/C/Users/Public/Documents/VITechnologies/lba-plugins-dependencies.lvlibp</Property>
+				<Property Name="Destination[0].destName" Type="Str">dependencies.lvlibp</Property>
+				<Property Name="Destination[0].path" Type="Path">/C/Users/Public/Documents/svelderrainruiz/NI_AB_PROJECTNAME.lvlibp</Property>
 				<Property Name="Destination[0].path.type" Type="Str">&lt;none&gt;</Property>
 				<Property Name="Destination[0].preserveHierarchy" Type="Bool">true</Property>
 				<Property Name="Destination[0].type" Type="Str">App</Property>
 				<Property Name="Destination[1].destName" Type="Str">Support Directory</Property>
-				<Property Name="Destination[1].path" Type="Path">/C/Users/Public/Documents/VITechnologies</Property>
+				<Property Name="Destination[1].path" Type="Path">/C/Users/Public/Documents/svelderrainruiz</Property>
 				<Property Name="Destination[1].path.type" Type="Str">&lt;none&gt;</Property>
 				<Property Name="DestinationCount" Type="Int">2</Property>
 				<Property Name="PackedLib_callersAdapt" Type="Bool">true</Property>
-				<Property Name="Source[0].itemID" Type="Str">{91966A81-28C9-4942-9321-02986535BCE6}</Property>
+				<Property Name="Source[0].itemID" Type="Str">{AB91C7F1-DBF6-43B0-AF33-9B5EAFE2A318}</Property>
 				<Property Name="Source[0].type" Type="Str">Container</Property>
 				<Property Name="Source[1].destinationIndex" Type="Int">0</Property>
 				<Property Name="Source[1].itemID" Type="Ref">/My Computer/Item[@Label='dependencies' and @Type='Folder']/dependencies.lvlib</Property>
@@ -224,7 +225,7 @@
 				<Property Name="TgtF_legalCopyright" Type="Str">Copyright © 2026 VI Technologies</Property>
 				<Property Name="TgtF_productName" Type="Str">lba-plugins-dependencies-ppl</Property>
 				<Property Name="TgtF_targetfileGUID" Type="Str">{241C8202-1355-46E7-9067-3AB8A15EE106}</Property>
-				<Property Name="TgtF_targetfileName" Type="Str">lba-plugins-dependencies.lvlibp</Property>
+				<Property Name="TgtF_targetfileName" Type="Str">dependencies.lvlibp</Property>
 				<Property Name="TgtF_versionIndependent" Type="Bool">true</Property>
 			</Item>
 		</Item>
