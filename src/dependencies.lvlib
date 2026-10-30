@@ -4,6 +4,7 @@
 	<Property Name="NI.Lib.SourceVersion" Type="Int">637566976</Property>
 	<Property Name="NI.Lib.Version" Type="Str">1.0.0.0</Property>
 	<Property Name="NI.LV.All.SourceOnly" Type="Bool">true</Property>
+	<Property Name="NI.SortType" Type="Int">3</Property>
 	<Item Name="global.vi" Type="VI" URL="../global.vi"/>
 	<Item Name="Initialize LUT.vi" Type="VI" URL="../Initialize LUT.vi"/>
 	<Item Name="KeyboardAndMouseDataAcquisition.ctl" Type="VI" URL="../KeyboardAndMouseDataAcquisition.ctl"/>
@@ -20,6 +21,7 @@
 	<Item Name="MainLUT.vi" Type="VI" URL="../MainLUT.vi"/>
 	<Item Name="MainLUTQualifiedNameParser.vi" Type="VI" URL="../MainLUTQualifiedNameParser.vi"/>
 	<Item Name="Mode.ctl" Type="VI" URL="../Mode.ctl"/>
+	<Item Name="KeybdEventSerializerLUT.vi" Type="VI" URL="../KeybdEventSerializerLUT.vi"/>
 	<Item Name="MouseLUT.vi" Type="VI" URL="../MouseLUT.vi"/>
 	<Item Name="MouseLUTSelector.ctl" Type="VI" URL="../MouseLUTSelector.ctl"/>
 	<Item Name="Path to Captures.vi" Type="VI" URL="../Path to Captures.vi"/>
@@ -27,10 +29,13 @@
 	<Item Name="RecordMode.ctl" Type="VI" URL="../RecordMode.ctl"/>
 	<Item Name="Replay Helper Loop.ctl" Type="VI" URL="../Replay Helper Loop.ctl"/>
 	<Item Name="Replay Loop Business Logic.vi" Type="VI" URL="../Replay Loop Business Logic.vi"/>
+	<Item Name="Test Procedure.ctl" Type="VI" URL="../../../testcoordinator/Libraries/testCoordinator/Test Procedure.ctl"/>
 	<Item Name="Replay MH Loop.ctl" Type="VI" URL="../Replay MH Loop.ctl"/>
 	<Item Name="ReplayMode.ctl" Type="VI" URL="../ReplayMode.ctl"/>
 	<Item Name="SerializedKeyPress.ctl" Type="VI" URL="../SerializedKeyPress.ctl"/>
 	<Item Name="Test.vi" Type="VI" URL="../Test.vi"/>
+	<Item Name="TestEvent.ctl" Type="VI" URL="../TestEvent.ctl"/>
 	<Item Name="User Events Metadata.ctl" Type="VI" URL="../User Events Metadata.ctl"/>
+	<Item Name="isProcedureCompatible.vi" Type="VI" URL="../isProcedureCompatible.vi"/>
 	<Item Name="VirtualKeyLUTQualifiedNameParser.vi" Type="VI" URL="../VirtualKeyLUTQualifiedNameParser.vi"/>
 </Library>
