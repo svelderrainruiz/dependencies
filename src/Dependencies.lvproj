@@ -194,7 +194,7 @@
 				<Property Name="Bld_previewCacheID" Type="Str">{49E36C7A-4D0D-4691-9530-BCC325C9BE2C}</Property>
 				<Property Name="Bld_sbomFile" Type="Path">/C/Users/Public/Documents/svelderrainruiz/Dependencies_lba-plugins-dependencies-ppl.cdx.sbom.json</Property>
 				<Property Name="Bld_userLogFile" Type="Path">/C/Users/Public/Documents/svelderrainruiz/Dependencies_lba-plugins-dependencies-ppl_log.txt</Property>
-				<Property Name="Bld_version.build" Type="Int">11</Property>
+				<Property Name="Bld_version.build" Type="Int">12</Property>
 				<Property Name="Bld_version.major" Type="Int">1</Property>
 				<Property Name="Destination[0].destName" Type="Str">dependencies.lvlibp</Property>
 				<Property Name="Destination[0].path" Type="Path">/C/Users/Public/Documents/svelderrainruiz/NI_AB_PROJECTNAME.lvlibp</Property>
