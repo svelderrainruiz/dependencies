@@ -124,6 +124,24 @@ jobs:
           if ($libraryItem.GetAttribute('URL') -cne 'dependencies.lvlib') {
               throw "The PPL project must reference its adjacent dependencies.lvlib; found '$($libraryItem.GetAttribute('URL'))'."
           }
+            $libraryDocument = [System.Xml.XmlDocument]::new()
+            $libraryDocument.Load($libraryPath)
+            $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies'))
+            foreach ($item in $libraryDocument.SelectNodes('//*[@URL]')) {
+              $url = $item.GetAttribute('URL')
+              if ([System.IO.Path]::IsPathRooted($url) -or $url -match '^[A-Za-z]:') {
+                throw "The dependencies LVLIBP source must not link to absolute paths: $url"
+              }
+              $sourcePath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($libraryPath, $url))
+              $relativeSourcePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $sourcePath)
+              if ([System.IO.Path]::IsPathRooted($relativeSourcePath) -or $relativeSourcePath -eq '..' -or
+                $relativeSourcePath.StartsWith('..' + [System.IO.Path]::DirectorySeparatorChar)) {
+                throw "The dependencies LVLIBP source escapes its repository checkout: $url"
+              }
+              if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                throw "A dependencies LVLIBP source file is missing: $url"
+              }
+            }
           $spec = $project.SelectSingleNode("//Item[@Name='lba-plugins-dependencies-ppl' and @Type='Packed Library']")
           if (-not $spec) { throw 'The PPL build specification was not found.' }
           $properties = @{}
