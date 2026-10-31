@@ -128,15 +128,19 @@ jobs:
           foreach ($property in $spec.SelectNodes('Property')) {
               $properties[$property.GetAttribute('Name')] = $property
           }
-          foreach ($requiredProperty in @('Destination[0].path', 'Bld_sbomFile', 'Bld_userLogFile')) {
+          foreach ($requiredProperty in @('Bld_localDestDir', 'Destination[0].path', 'Destination[1].path', 'Bld_sbomFile', 'Bld_userLogFile')) {
               if (-not $properties.ContainsKey($requiredProperty)) {
                   throw "The PPL build specification is missing '$requiredProperty'."
               }
           }
           $assetPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies.lvlibp'
+          $supportPath = Join-Path $env:OUTPUT_DIRECTORY 'support'
           $sbomPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies.lvlibp.cdx.sbom.json'
           $buildLogPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies-ppl-build.log'
+          $null = New-Item -ItemType Directory -Path $supportPath -Force
+          $properties['Bld_localDestDir'].InnerText = ConvertTo-LabVIEWPath $env:OUTPUT_DIRECTORY
           $properties['Destination[0].path'].InnerText = ConvertTo-LabVIEWPath $assetPath
+          $properties['Destination[1].path'].InnerText = ConvertTo-LabVIEWPath $supportPath
           $properties['Bld_sbomFile'].InnerText = ConvertTo-LabVIEWPath $sbomPath
           $properties['Bld_userLogFile'].InnerText = ConvertTo-LabVIEWPath $buildLogPath
           $project.Save($projectPath)
