@@ -54,6 +54,10 @@ jobs:
         shell: pwsh
         run: ./tests/Test-CandidateSbomPackage.ps1
 
+      - name: Test PPL Build Retry
+        shell: pwsh
+        run: ./tests/Test-CandidatePplBuild.ps1
+
       - name: Validate PPL Source Closure
         shell: pwsh
         run: |
@@ -165,6 +169,7 @@ jobs:
         shell: pwsh
         run: |
           . (Join-Path $env:GITHUB_WORKSPACE '.github/scripts/Assert-CandidateSbomPackage.ps1')
+          . (Join-Path $env:GITHUB_WORKSPACE '.github/scripts/Invoke-CandidatePplBuild.ps1')
 
           function ConvertTo-LabVIEWPath {
             param([Parameter(Mandatory = $true)][string]$Path)
@@ -234,9 +239,13 @@ jobs:
           $properties['Bld_userLogFile'].InnerText = ConvertTo-LabVIEWPath $buildLogPath
           $project.Save($projectPath)
 
-          & vipm --labview-version 2026 --labview-bitness 64 build $projectPath `
-              --lvproj-build-spec 'lba-plugins-dependencies-ppl' --lvproj-target 'My Computer'
-            $buildExitCode = $LASTEXITCODE
+            $buildArguments = @(
+              '--labview-version', '2026', '--labview-bitness', '64', 'build', $projectPath,
+              '--lvproj-build-spec', 'lba-plugins-dependencies-ppl', '--lvproj-target', 'My Computer'
+            )
+            $buildResult = Invoke-ProducerVipmBuild -Arguments $buildArguments -WorkingDirectory $repositoryRoot `
+              -OutputDirectory $env:OUTPUT_DIRECTORY
+            $buildExitCode = $buildResult.ExitCode
             if ($buildExitCode -ne 0) {
               $diagnosticSbomPath = Join-Path $env:OUTPUT_DIRECTORY 'missing-source-diagnostics.cdx.sbom.json'
               & vipm --labview-version 2026 --labview-bitness 64 sbom $projectPath `
