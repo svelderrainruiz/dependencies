@@ -283,15 +283,28 @@ jobs:
               $assetVersionInfo.ProductVersion -cne $expectedVersion) {
               throw "LVLIBP file version '$($assetVersionInfo.FileVersion)' and product version '$($assetVersionInfo.ProductVersion)' do not match SBOM version '$expectedVersion'."
           }
-          $vipmInventoryJson = & vipm --labview-version 2026 --labview-bitness 64 list --installed --vipm --json
+          $vipmInventoryJson = & vipm --labview-version 2026 --labview-bitness 64 list --installed --json
           if ($LASTEXITCODE -ne 0) { throw "Could not inspect installed VIPM packages; vipm exited with code $LASTEXITCODE." }
           $vipmInventory = ($vipmInventoryJson -join [Environment]::NewLine) | ConvertFrom-Json
           $vipmPackageFiles = Get-ProducerVipmPackageFileInventory -Inventory $vipmInventory
           $pplSourceFiles = Read-ProducerPplSourceFile -BuildLogPath $buildLogPath
-          $pplVipmPackages = Assert-ProducerSbomCoverage -Sbom $sbom -Inventory $vipmInventory `
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipm.toml'
+          $pplVipmPackages = Get-ProducerPplVipmSourcePackage -Inventory $vipmInventory `
             -PackageFiles $vipmPackageFiles -SourceFiles $pplSourceFiles `
             -RequiredPackages @('jdp_science_lib_common_utilities')
-          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipm.toml'
+          $manifestSbomPath = Join-Path $env:OUTPUT_DIRECTORY 'vipm-manifest.cdx.sbom.json'
+          & vipm --labview-version 2026 --labview-bitness 64 sbom $manifestPath `
+              --format cyclonedx --schema-version 1.5 --no-dev --output $manifestSbomPath
+          if ($LASTEXITCODE -ne 0) { throw "VIPM manifest SBOM generation failed with exit code $LASTEXITCODE." }
+          if (-not (Test-Path -LiteralPath $manifestSbomPath -PathType Leaf)) {
+              throw "VIPM manifest SBOM generation did not produce '$manifestSbomPath'."
+          }
+          $manifestSbom = Get-Content -LiteralPath $manifestSbomPath -Raw -Encoding utf8 | ConvertFrom-Json
+          Merge-ProducerSbomVipmSourceComponent -Sbom $sbom -ManifestSbom $manifestSbom `
+              -SourcePackages $pplVipmPackages | Out-Null
+          Assert-ProducerSbomCoverage -Sbom $sbom -Inventory $vipmInventory -PackageFiles $vipmPackageFiles `
+              -SourceFiles $pplSourceFiles -RequiredPackages @('jdp_science_lib_common_utilities') | Out-Null
+          [System.IO.File]::WriteAllText($sbomPath, ($sbom | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
           $record = [ordered]@{
               schemaVersion = '1.0'
               product = [ordered]@{
@@ -301,7 +314,7 @@ jobs:
                   buildSpec = 'lba-plugins-dependencies-ppl'
               }
                 dependencies = @($pplVipmPackages.GetEnumerator() | ForEach-Object {
-                  [ordered]@{ name = $_.Key; version = $_.Value }
+                    [ordered]@{ name = $_.Key; version = $_.Value.version; sourceFiles = @($_.Value.sourceFiles) }
                 })
               source = [ordered]@{
                   repository = 'svelderrainruiz/dependencies'
@@ -310,6 +323,11 @@ jobs:
               dependencyManifest = [ordered]@{
                   fileName = 'vipm.toml'
                   sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+                manifestSbom = [ordered]@{
+                  fileName = [System.IO.Path]::GetFileName($manifestSbomPath)
+                  sizeBytes = (Get-Item -LiteralPath $manifestSbomPath).Length
+                  sha256 = (Get-FileHash -LiteralPath $manifestSbomPath -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
               asset = [ordered]@{
                   fileName = [System.IO.Path]::GetFileName($assetPath)
