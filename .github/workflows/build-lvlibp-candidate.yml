@@ -107,6 +107,13 @@ jobs:
           $project = [System.Xml.XmlDocument]::new()
           $project.PreserveWhitespace = $true
           $project.Load($projectPath)
+            $libraryItem = $project.SelectSingleNode("//Item[@Name='dependencies.lvlib' and @Type='Library']")
+            if (-not $libraryItem) { throw 'The dependencies.lvlib project item was not found.' }
+            $libraryPath = Join-Path (Split-Path -Parent $projectPath) 'dependencies.lvlib'
+            if (-not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
+              throw "The tracked dependencies library is missing: $libraryPath"
+            }
+            $libraryItem.SetAttribute('URL', 'dependencies.lvlib')
           $spec = $project.SelectSingleNode("//Item[@Name='lba-plugins-dependencies-ppl' and @Type='Packed Library']")
           if (-not $spec) { throw 'The PPL build specification was not found.' }
           $properties = @{}
