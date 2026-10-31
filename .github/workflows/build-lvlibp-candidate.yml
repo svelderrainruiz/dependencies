@@ -1,0 +1,168 @@
+name: Build LVLIBP Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      testcoordinator_ref:
+        description: TestCoordinator source ref providing Test Procedure.ctl
+        required: true
+        type: string
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependencies-lvlibp-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-lvlibp:
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 120
+    steps:
+      - name: Checkout Dependencies Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Checkout Dependencies Build Tree
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: svelderrainruiz/dependencies
+          ref: ${{ github.sha }}
+          path: workspace/dependencies
+
+      - name: Checkout TestCoordinator Source Input
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: svelderrainruiz/testcoordinator
+          ref: ${{ inputs.testcoordinator_ref }}
+          path: testcoordinator
+
+      - name: Verify Windows Build Environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+              throw 'The self-hosted Windows runner must be elevated.'
+          }
+          $vipm = (& vipm version --json | ConvertFrom-Json)
+          if ($LASTEXITCODE -ne 0 -or $vipm.edition -cne 'Professional') {
+              throw 'VIPM Professional is required on the self-hosted Windows runner.'
+          }
+          $labview = (& vipm labview list --json | ConvertFrom-Json)
+          $installation = @($labview.labview_versions | Where-Object { $_.version_year -eq '2026' -and $_.bitness -eq 64 })
+          if ($LASTEXITCODE -ne 0 -or $installation.Count -ne 1) {
+              throw 'Exactly one LabVIEW 2026 64-bit installation must be available.'
+          }
+
+      - name: Prepare Isolated Build Outputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command vipm -ErrorAction SilentlyContinue)) {
+              throw 'VIPM CLI is required on the self-hosted Windows runner.'
+          }
+          $outputDirectory = Join-Path $env:GITHUB_WORKSPACE 'output'
+          if (Test-Path -LiteralPath $outputDirectory) {
+              Remove-Item -LiteralPath $outputDirectory -Recurse -Force
+          }
+          $null = New-Item -ItemType Directory -Path $outputDirectory -Force
+          "OUTPUT_DIRECTORY=$outputDirectory" >> $env:GITHUB_ENV
+
+      - name: Build PPL and CycloneDX SBOM
+        shell: pwsh
+        env:
+          INPUT_TESTCOORDINATOR_REF: ${{ inputs.testcoordinator_ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $projectPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/src/Dependencies.lvproj'
+          if (-not (Test-Path -LiteralPath $projectPath -PathType Leaf)) {
+              throw "Dependencies project was not checked out: $projectPath"
+          }
+          $project = [System.Xml.XmlDocument]::new()
+          $project.PreserveWhitespace = $true
+          $project.Load($projectPath)
+          $spec = $project.SelectSingleNode("//Item[@Name='lba-plugins-dependencies-ppl' and @Type='Packed Library']")
+          if (-not $spec) { throw 'The PPL build specification was not found.' }
+          $properties = @{}
+          foreach ($property in $spec.SelectNodes('Property')) {
+              $properties[$property.GetAttribute('Name')] = $property
+          }
+          foreach ($requiredProperty in @('Destination[0].path', 'Bld_sbomFile', 'Bld_userLogFile')) {
+              if (-not $properties.ContainsKey($requiredProperty)) {
+                  throw "The PPL build specification is missing '$requiredProperty'."
+              }
+          }
+          $assetPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies.lvlibp'
+          $sbomPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies.lvlibp.cdx.sbom.json'
+          $properties['Destination[0].path'].InnerText = $assetPath
+          $properties['Bld_sbomFile'].InnerText = $sbomPath
+          $properties['Bld_userLogFile'].InnerText = Join-Path $env:OUTPUT_DIRECTORY 'dependencies-ppl-build.log'
+          $project.Save($projectPath)
+
+          & vipm --labview-version 2026 --labview-bitness 64 build $projectPath `
+              --lvproj-build-spec 'lba-plugins-dependencies-ppl' --lvproj-target 'My Computer'
+          if ($LASTEXITCODE -ne 0) { throw "VIPM PPL build failed with exit code $LASTEXITCODE." }
+          if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) {
+              throw "VIPM build did not produce '$assetPath'."
+          }
+
+          & vipm --labview-version 2026 --labview-bitness 64 sbom $projectPath `
+              --format cyclonedx --schema-version 1.5 `
+              --lvproj-build-spec 'lba-plugins-dependencies-ppl' --output $sbomPath
+          if ($LASTEXITCODE -ne 0) { throw "VIPM SBOM generation failed with exit code $LASTEXITCODE." }
+          if (-not (Test-Path -LiteralPath $sbomPath -PathType Leaf)) {
+              throw "VIPM SBOM generation did not produce '$sbomPath'."
+          }
+
+          $sbom = Get-Content -LiteralPath $sbomPath -Raw -Encoding utf8 | ConvertFrom-Json
+          if ($sbom.bomFormat -cne 'CycloneDX' -or $sbom.specVersion -cne '1.5' -or
+              -not $sbom.metadata.component.name -or -not $sbom.metadata.component.version) {
+              throw 'Generated SBOM is missing the expected CycloneDX format or product identity.'
+          }
+          $testCoordinatorCommit = (git -C (Join-Path $env:GITHUB_WORKSPACE 'testcoordinator') rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $testCoordinatorCommit -notmatch '^[A-Fa-f0-9]{40}$') {
+              throw 'Could not resolve the exact TestCoordinator source commit.'
+          }
+          $record = [ordered]@{
+              schemaVersion = '1.0'
+              product = [ordered]@{
+                  name = $sbom.metadata.component.name
+                  version = $sbom.metadata.component.version
+                  kind = 'lvlibp'
+                  buildSpec = 'lba-plugins-dependencies-ppl'
+              }
+              dependencies = @([ordered]@{
+                  ecosystem = 'git'
+                  repository = 'svelderrainruiz/testcoordinator'
+                  ref = $env:INPUT_TESTCOORDINATOR_REF
+                  commit = $testCoordinatorCommit
+                  scope = 'build'
+              })
+              source = [ordered]@{
+                  repository = 'svelderrainruiz/dependencies'
+                  commit = $env:GITHUB_SHA
+              }
+              asset = [ordered]@{
+                  fileName = [System.IO.Path]::GetFileName($assetPath)
+                  sizeBytes = (Get-Item -LiteralPath $assetPath).Length
+                  sha256 = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+              sbom = [ordered]@{
+                  fileName = [System.IO.Path]::GetFileName($sbomPath)
+                  sizeBytes = (Get-Item -LiteralPath $sbomPath).Length
+                  sha256 = (Get-FileHash -LiteralPath $sbomPath -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+          }
+          $recordPath = Join-Path $env:OUTPUT_DIRECTORY 'lvlibp-build-record.json'
+          [System.IO.File]::WriteAllText($recordPath, ($record | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
+
+      - name: Upload LVLIBP Candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dependencies-lvlibp-candidate-${{ github.run_id }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 30
