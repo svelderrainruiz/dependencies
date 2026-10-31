@@ -6,6 +6,7 @@ labview-bitness = "64"
 
 [dependencies]
 jdp_science_jsontext = "1.9.1.125"
+jdp_science_lib_common_utilities = "1.4.2.19"
 oglib_boolean = "6.0.0.9"
 oglib_comparison = "6.0.0.4"
 
