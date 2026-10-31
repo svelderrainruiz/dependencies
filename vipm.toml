@@ -9,9 +9,6 @@ jdp_science_jsontext = "1.9.1.125"
 oglib_boolean = "6.0.0.9"
 oglib_comparison = "6.0.0.4"
 
-[nipm.dependencies]
-ni-labview-2026-vilib = "26.3.1.49171-0+f19"
-
 [build.ppl]
 type = "lvproj"
 path = "src/Dependencies.lvproj"
