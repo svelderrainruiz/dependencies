@@ -7,12 +7,6 @@ on:
     paths:
       - .github/workflows/build-lvlibp-candidate.yml
   workflow_dispatch:
-    inputs:
-      testcoordinator_ref:
-        description: TestCoordinator source ref providing Test Procedure.ctl
-        required: true
-        type: string
-        default: main
 
 permissions:
   contents: read
@@ -54,13 +48,6 @@ jobs:
           ref: ${{ github.sha }}
           path: workspace/dependencies
 
-      - name: Checkout TestCoordinator Source Input
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: svelderrainruiz/testcoordinator
-          ref: ${{ inputs.testcoordinator_ref }}
-          path: testcoordinator
-
       - name: Verify Windows Build Environment
         shell: pwsh
         run: |
@@ -96,8 +83,6 @@ jobs:
 
       - name: Build PPL and CycloneDX SBOM
         shell: pwsh
-        env:
-          INPUT_TESTCOORDINATOR_REF: ${{ inputs.testcoordinator_ref }}
         run: |
           $ErrorActionPreference = 'Stop'
           $projectPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/src/Dependencies.lvproj'
@@ -113,7 +98,9 @@ jobs:
             if (-not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
               throw "The tracked dependencies library is missing: $libraryPath"
             }
-            $libraryItem.SetAttribute('URL', 'dependencies.lvlib')
+            if ($libraryItem.GetAttribute('URL') -cne 'dependencies.lvlib') {
+              throw "The PPL project must reference its adjacent dependencies.lvlib; found '$($libraryItem.GetAttribute('URL'))'."
+            }
           $spec = $project.SelectSingleNode("//Item[@Name='lba-plugins-dependencies-ppl' and @Type='Packed Library']")
           if (-not $spec) { throw 'The PPL build specification was not found.' }
           $properties = @{}
@@ -152,10 +139,6 @@ jobs:
               -not $sbom.metadata.component.name -or -not $sbom.metadata.component.version) {
               throw 'Generated SBOM is missing the expected CycloneDX format or product identity.'
           }
-          $testCoordinatorCommit = (git -C (Join-Path $env:GITHUB_WORKSPACE 'testcoordinator') rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $testCoordinatorCommit -notmatch '^[A-Fa-f0-9]{40}$') {
-              throw 'Could not resolve the exact TestCoordinator source commit.'
-          }
           $record = [ordered]@{
               schemaVersion = '1.0'
               product = [ordered]@{
@@ -164,13 +147,7 @@ jobs:
                   kind = 'lvlibp'
                   buildSpec = 'lba-plugins-dependencies-ppl'
               }
-              dependencies = @([ordered]@{
-                  ecosystem = 'git'
-                  repository = 'svelderrainruiz/testcoordinator'
-                  ref = $env:INPUT_TESTCOORDINATOR_REF
-                  commit = $testCoordinatorCommit
-                  scope = 'build'
-              })
+                dependencies = @()
               source = [ordered]@{
                   repository = 'svelderrainruiz/dependencies'
                   commit = $env:GITHUB_SHA
