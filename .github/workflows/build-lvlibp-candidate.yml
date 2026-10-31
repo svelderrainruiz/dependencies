@@ -96,6 +96,15 @@ jobs:
       - name: Build PPL and CycloneDX SBOM
         shell: pwsh
         run: |
+          function ConvertTo-LabVIEWPath {
+            param([Parameter(Mandatory = $true)][string]$Path)
+            $fullPath = [System.IO.Path]::GetFullPath($Path)
+            if ($fullPath -notmatch '^(?<drive>[A-Za-z]):\\(?<tail>.*)$') {
+              throw "LabVIEW project paths must be on a drive-letter volume: $fullPath"
+            }
+            return "/$($Matches.drive.ToUpperInvariant())/" + $Matches.tail.Replace('\', '/')
+          }
+
           $ErrorActionPreference = 'Stop'
           $projectPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/src/Dependencies.lvproj'
           if (-not (Test-Path -LiteralPath $projectPath -PathType Leaf)) {
@@ -126,9 +135,10 @@ jobs:
           }
           $assetPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies.lvlibp'
           $sbomPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies.lvlibp.cdx.sbom.json'
-          $properties['Destination[0].path'].InnerText = $assetPath
-          $properties['Bld_sbomFile'].InnerText = $sbomPath
-          $properties['Bld_userLogFile'].InnerText = Join-Path $env:OUTPUT_DIRECTORY 'dependencies-ppl-build.log'
+          $buildLogPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies-ppl-build.log'
+          $properties['Destination[0].path'].InnerText = ConvertTo-LabVIEWPath $assetPath
+          $properties['Bld_sbomFile'].InnerText = ConvertTo-LabVIEWPath $sbomPath
+          $properties['Bld_userLogFile'].InnerText = ConvertTo-LabVIEWPath $buildLogPath
           $project.Save($projectPath)
 
           & vipm --labview-version 2026 --labview-bitness 64 build $projectPath `
