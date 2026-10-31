@@ -65,6 +65,46 @@ Assert-Failure {
     Assert-ProducerSbomCoverage -Sbom $sbom -Inventory $inventory -PackageFiles $packageFiles `
         -SourceFiles $sourceFiles -RequiredPackages $requiredPackages
 } '*jdp_science_lib_common_utilities*1.4.2.19*'
+$manifestSbom = [pscustomobject]@{
+    bomFormat = 'CycloneDX'; specVersion = '1.5'
+    components = @(
+        $sbom.components[0]
+        [pscustomobject]@{
+            'bom-ref' = $packageRef; name = $packageName; version = '1.4.2.19'; purl = $packageRef
+            licenses = @([pscustomobject]@{ license = [pscustomobject]@{ id = 'BSD-3-Clause' } })
+        }
+    )
+}
+$sourcePackages = Get-ProducerPplVipmSourcePackage -Inventory $inventory -PackageFiles $packageFiles `
+    -SourceFiles $sourceFiles -RequiredPackages $requiredPackages
+$mergedSbom = $sbom | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+Merge-ProducerSbomVipmSourceComponent -Sbom $mergedSbom -ManifestSbom $manifestSbom `
+    -SourcePackages $sourcePackages | Out-Null
+Assert-ProducerSbomCoverage -Sbom $mergedSbom -Inventory $inventory -PackageFiles $packageFiles `
+    -SourceFiles $sourceFiles -RequiredPackages $requiredPackages | Out-Null
+$mergedComponent = @($mergedSbom.components | Where-Object { $_.purl -ceq $packageRef })[0]
+if ($mergedComponent.licenses[0].license.id -cne 'BSD-3-Clause' -or
+    @($mergedSbom.dependencies[0].dependsOn) -notcontains $packageRef) {
+    throw 'Manifest SBOM enrichment must preserve component metadata and link source-owned packages to the PPL.'
+}
+$missingManifestSbom = [pscustomobject]@{
+    bomFormat = 'CycloneDX'; specVersion = '1.5'; components = @($sbom.components[0])
+}
+Assert-Failure {
+    $copy = $sbom | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    Merge-ProducerSbomVipmSourceComponent -Sbom $copy -ManifestSbom $missingManifestSbom -SourcePackages $sourcePackages
+} '*jdp_science_lib_common_utilities*1.4.2.19*manifest SBOM*'
+$wrongManifestSbom = [pscustomobject]@{
+    bomFormat = 'CycloneDX'; specVersion = '1.5'
+    components = @(
+        $sbom.components[0]
+        [pscustomobject]@{ 'bom-ref' = 'wrong'; name = $packageName; version = '1.4.2.20'; purl = 'pkg:vipm/jdp_science_lib_common_utilities@1.4.2.20' }
+    )
+}
+Assert-Failure {
+    $copy = $sbom | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    Merge-ProducerSbomVipmSourceComponent -Sbom $copy -ManifestSbom $wrongManifestSbom -SourcePackages $sourcePackages
+} '*jdp_science_lib_common_utilities*1.4.2.19*manifest SBOM*'
 $sbom.components += [pscustomobject]@{ 'bom-ref' = $packageRef; name = $packageName; version = '1.4.2.19'; purl = $packageRef }
 Assert-Failure {
     Assert-ProducerSbomCoverage -Sbom $sbom -Inventory $inventory -PackageFiles $packageFiles `
@@ -75,6 +115,9 @@ $sourcePackages = Assert-ProducerSbomCoverage -Sbom $sbom -Inventory $inventory 
     -SourceFiles $sourceFiles -RequiredPackages $requiredPackages
 if ($sourcePackages.Count -ne 2 -or $sourcePackages.ContainsKey('unused_installed_package')) {
     throw 'An installed but unused VIPM package was reported as part of the PPL.'
+}
+if ($sourcePackages[$packageName].sourceFiles.Count -ne 1 -or $sourcePackages[$packageName].sourceFiles[0] -cne $commonFile) {
+    throw 'Candidate ownership evidence must retain the exact PPL source path.'
 }
 $ambiguousPackageFiles = @{} + $script:ownershipFiles
 $ambiguousPackageFiles['unused_installed_package'] = @($commonFile)
@@ -135,7 +178,12 @@ Assert-Failure { Get-ProducerVipmInstalledFilePath -PackageInfo @{ packages = @(
 
 $workflow = [System.IO.File]::ReadAllText((Join-Path $root '.github/workflows/build-lvlibp-candidate.yml'))
 if (-not $workflow.Contains('Assert-ProducerSbomCoverage -Sbom $sbom -Inventory $vipmInventory') -or
-    -not $workflow.Contains("-RequiredPackages @('$packageName')")) {
+    -not $workflow.Contains('list --installed --json') -or
+    $workflow.Contains('list --installed --vipm') -or
+    -not $workflow.Contains("-RequiredPackages @('$packageName')") -or
+    -not $workflow.Contains('sbom $manifestPath') -or
+    -not $workflow.Contains('Merge-ProducerSbomVipmSourceComponent -Sbom $sbom -ManifestSbom $manifestSbom') -or
+    -not $workflow.Contains('manifestSbom = [ordered]@{')) {
     throw 'The producer candidate workflow must enforce source-owned Common Utilities SBOM coverage.'
 }
 Write-Output 'PASS: producer source ownership, SBOM coverage, and workflow wiring.'
