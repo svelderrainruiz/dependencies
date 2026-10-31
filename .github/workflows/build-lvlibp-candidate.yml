@@ -94,6 +94,7 @@ jobs:
           Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $env:OUTPUT_DIRECTORY 'vipm.toml')
 
       - name: Build PPL and CycloneDX SBOM
+        id: build
         shell: pwsh
         run: |
           function ConvertTo-LabVIEWPath {
@@ -106,6 +107,7 @@ jobs:
           }
 
           $ErrorActionPreference = 'Stop'
+          $env:VIPM_DEBUG = '1'
           $projectPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/src/Dependencies.lvproj'
           if (-not (Test-Path -LiteralPath $projectPath -PathType Leaf)) {
               throw "Dependencies project was not checked out: $projectPath"
@@ -113,15 +115,15 @@ jobs:
           $project = [System.Xml.XmlDocument]::new()
           $project.PreserveWhitespace = $true
           $project.Load($projectPath)
-            $libraryItem = $project.SelectSingleNode("//Item[@Name='dependencies.lvlib' and @Type='Library']")
-            if (-not $libraryItem) { throw 'The dependencies.lvlib project item was not found.' }
-            $libraryPath = Join-Path (Split-Path -Parent $projectPath) 'dependencies.lvlib'
-            if (-not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
+          $libraryItem = $project.SelectSingleNode("//Item[@Name='dependencies.lvlib' and @Type='Library']")
+          if (-not $libraryItem) { throw 'The dependencies.lvlib project item was not found.' }
+          $libraryPath = Join-Path (Split-Path -Parent $projectPath) 'dependencies.lvlib'
+          if (-not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
               throw "The tracked dependencies library is missing: $libraryPath"
             }
-            if ($libraryItem.GetAttribute('URL') -cne 'dependencies.lvlib') {
+          if ($libraryItem.GetAttribute('URL') -cne 'dependencies.lvlib') {
               throw "The PPL project must reference its adjacent dependencies.lvlib; found '$($libraryItem.GetAttribute('URL'))'."
-            }
+          }
           $spec = $project.SelectSingleNode("//Item[@Name='lba-plugins-dependencies-ppl' and @Type='Packed Library']")
           if (-not $spec) { throw 'The PPL build specification was not found.' }
           $properties = @{}
@@ -147,7 +149,18 @@ jobs:
 
           & vipm --labview-version 2026 --labview-bitness 64 build $projectPath `
               --lvproj-build-spec 'lba-plugins-dependencies-ppl' --lvproj-target 'My Computer'
-          if ($LASTEXITCODE -ne 0) { throw "VIPM PPL build failed with exit code $LASTEXITCODE." }
+            $buildExitCode = $LASTEXITCODE
+            if ($buildExitCode -ne 0) {
+              $diagnosticSbomPath = Join-Path $env:OUTPUT_DIRECTORY 'missing-source-diagnostics.cdx.sbom.json'
+              & vipm --labview-version 2026 --labview-bitness 64 sbom $projectPath `
+                --format cyclonedx --schema-version 1.5 `
+                --lvproj-build-spec 'lba-plugins-dependencies-ppl' `
+                --allow-missing-files --output $diagnosticSbomPath
+              if ($LASTEXITCODE -ne 0) {
+                Write-Warning "VIPM diagnostic SBOM scan also failed with exit code $LASTEXITCODE."
+              }
+              throw "VIPM PPL build failed with exit code $buildExitCode."
+            }
           if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) {
               throw "VIPM build did not produce '$assetPath'."
           }
@@ -165,7 +178,7 @@ jobs:
               -not $sbom.metadata.component.name -or -not $sbom.metadata.component.version) {
               throw 'Generated SBOM is missing the expected CycloneDX format or product identity.'
           }
-            $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipm.toml'
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipm.toml'
           $record = [ordered]@{
               schemaVersion = '1.0'
               product = [ordered]@{
@@ -174,12 +187,12 @@ jobs:
                   kind = 'lvlibp'
                   buildSpec = 'lba-plugins-dependencies-ppl'
               }
-                dependencies = @()
+              dependencies = @()
               source = [ordered]@{
                   repository = 'svelderrainruiz/dependencies'
                   commit = $env:GITHUB_SHA
               }
-                dependencyManifest = [ordered]@{
+              dependencyManifest = [ordered]@{
                   fileName = 'vipm.toml'
                   sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
                 }
@@ -204,3 +217,12 @@ jobs:
           path: output/
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload PPL Failure Diagnostics
+        if: failure() && steps.build.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: dependencies-lvlibp-diagnostics-${{ github.run_id }}
+          path: output/
+          if-no-files-found: warn
+          retention-days: 3
