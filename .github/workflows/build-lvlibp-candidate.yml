@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - .github/workflows/build-lvlibp-candidate.yml
+      - src/**
+      - vipm.toml
   workflow_dispatch:
 
 permissions:
@@ -33,7 +35,62 @@ jobs:
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           "$(go env GOPATH)/bin/actionlint" .github/workflows/build-lvlibp-candidate.yml
 
+  source-preflight:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Workflow Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Checkout Dependencies Source Tree
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          repository: svelderrainruiz/dependencies
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: workspace/dependencies
+
+      - name: Validate PPL Source Closure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies'))
+          $projectPath = Join-Path $repositoryRoot 'src/Dependencies.lvproj'
+          $libraryPath = Join-Path $repositoryRoot 'src/dependencies.lvlib'
+          foreach ($path in @($projectPath, $libraryPath, (Join-Path $repositoryRoot 'vipm.toml'))) {
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                  throw "Required PPL source input is missing: $path"
+              }
+          }
+          $project = [System.Xml.XmlDocument]::new()
+          $project.Load($projectPath)
+          $libraryItem = $project.SelectSingleNode("//Item[@Name='dependencies.lvlib' and @Type='Library']")
+          if (-not $libraryItem -or $libraryItem.GetAttribute('URL') -cne 'dependencies.lvlib') {
+              throw 'Dependencies.lvproj must link its adjacent dependencies.lvlib.'
+          }
+          $pplSpecs = @($project.SelectNodes("//Item[@Name='lba-plugins-dependencies-ppl' and @Type='Packed Library']"))
+          if ($pplSpecs.Count -ne 1) { throw 'Expected exactly one lba-plugins-dependencies-ppl build specification.' }
+
+          $library = [System.Xml.XmlDocument]::new()
+          $library.Load($libraryPath)
+          $references = @($library.SelectNodes('//*[@URL]'))
+          foreach ($item in $references) {
+              $url = $item.GetAttribute('URL')
+              if ([System.IO.Path]::IsPathRooted($url) -or $url -match '^[A-Za-z]:') {
+                  throw "LVLIBP source contains an absolute URL: $url"
+              }
+              $sourcePath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($libraryPath, $url))
+              $relativePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $sourcePath)
+              if ([System.IO.Path]::IsPathRooted($relativePath) -or $relativePath -eq '..' -or
+                  $relativePath.StartsWith('..' + [System.IO.Path]::DirectorySeparatorChar)) {
+                  throw "LVLIBP source URL escapes the dependencies repository: $url"
+              }
+              if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                  throw "LVLIBP source URL does not resolve in the checkout: $url"
+              }
+          }
+          Write-Host "Validated $($references.Count) repository-local LVLIBP source URLs."
+
   build-lvlibp:
+    needs: source-preflight
     if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, windows]
     timeout-minutes: 120
