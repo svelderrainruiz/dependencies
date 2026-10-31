@@ -81,6 +81,18 @@ jobs:
           $null = New-Item -ItemType Directory -Path $outputDirectory -Force
           "OUTPUT_DIRECTORY=$outputDirectory" >> $env:GITHUB_ENV
 
+      - name: Install PPL Build Dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipm.toml'
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+              throw "Pinned VIPM dependency manifest is missing: $manifestPath"
+          }
+          & vipm --labview-version 2026 --labview-bitness 64 install -y $manifestPath
+          if ($LASTEXITCODE -ne 0) { throw "VIPM/NIPM prerequisite installation failed with exit code $LASTEXITCODE." }
+          Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $env:OUTPUT_DIRECTORY 'vipm.toml')
+
       - name: Build PPL and CycloneDX SBOM
         shell: pwsh
         run: |
@@ -139,6 +151,7 @@ jobs:
               -not $sbom.metadata.component.name -or -not $sbom.metadata.component.version) {
               throw 'Generated SBOM is missing the expected CycloneDX format or product identity.'
           }
+            $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipm.toml'
           $record = [ordered]@{
               schemaVersion = '1.0'
               product = [ordered]@{
@@ -152,6 +165,10 @@ jobs:
                   repository = 'svelderrainruiz/dependencies'
                   commit = $env:GITHUB_SHA
               }
+                dependencyManifest = [ordered]@{
+                  fileName = 'vipm.toml'
+                  sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
               asset = [ordered]@{
                   fileName = [System.IO.Path]::GetFileName($assetPath)
                   sizeBytes = (Get-Item -LiteralPath $assetPath).Length
