@@ -182,7 +182,7 @@
 				<Property Name="PKG_version" Type="Str">1.0.0</Property>
 			</Item>
 			<Item Name="lba-plugins-dependencies-ppl" Type="Packed Library">
-				<Property Name="Bld_autoIncrement" Type="Bool">true</Property>
+				<Property Name="Bld_autoIncrement" Type="Bool">false</Property>
 				<Property Name="Bld_buildCacheID" Type="Str">{AE984EEA-69BD-4720-880E-78A836DAE0ED}</Property>
 				<Property Name="Bld_buildSpecName" Type="Str">lba-plugins-dependencies-ppl</Property>
 				<Property Name="Bld_excludeDependentDLLs" Type="Bool">true</Property>

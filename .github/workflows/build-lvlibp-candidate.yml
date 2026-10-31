@@ -5,8 +5,10 @@ on:
     branches:
       - main
     paths:
+      - .github/scripts/**
       - .github/workflows/build-lvlibp-candidate.yml
       - src/**
+      - tests/**
       - vipm.toml
   workflow_dispatch:
 
@@ -23,10 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
         with:
           go-version: '1.24.x'
 
@@ -39,14 +41,18 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout Workflow Repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Checkout Dependencies Source Tree
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: svelderrainruiz/dependencies
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           path: workspace/dependencies
+
+      - name: Test PPL SBOM Coverage
+        shell: pwsh
+        run: ./tests/Test-CandidateSbomPackage.ps1
 
       - name: Validate PPL Source Closure
         shell: pwsh
@@ -68,6 +74,10 @@ jobs:
           }
           $pplSpecs = @($project.SelectNodes("//Item[@Name='lba-plugins-dependencies-ppl' and @Type='Packed Library']"))
           if ($pplSpecs.Count -ne 1) { throw 'Expected exactly one lba-plugins-dependencies-ppl build specification.' }
+          $autoIncrement = @($pplSpecs[0].SelectNodes("Property[@Name='Bld_autoIncrement']"))
+          if ($autoIncrement.Count -ne 1 -or $autoIncrement[0].InnerText -cne 'false') {
+              throw 'The PPL build specification must disable automatic version increment.'
+          }
 
           $library = [System.Xml.XmlDocument]::new()
           $library.Load($libraryPath)
@@ -96,10 +106,10 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Checkout Dependencies Repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Checkout Dependencies Build Tree
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: svelderrainruiz/dependencies
           ref: ${{ github.sha }}
@@ -154,6 +164,8 @@ jobs:
         id: build
         shell: pwsh
         run: |
+          . (Join-Path $env:GITHUB_WORKSPACE '.github/scripts/Assert-CandidateSbomPackage.ps1')
+
           function ConvertTo-LabVIEWPath {
             param([Parameter(Mandatory = $true)][string]$Path)
             $fullPath = [System.IO.Path]::GetFullPath($Path)
@@ -250,9 +262,26 @@ jobs:
 
           $sbom = Get-Content -LiteralPath $sbomPath -Raw -Encoding utf8 | ConvertFrom-Json
           if ($sbom.bomFormat -cne 'CycloneDX' -or $sbom.specVersion -cne '1.5' -or
-              -not $sbom.metadata.component.name -or -not $sbom.metadata.component.version) {
+              $sbom.metadata.component.name -cne 'lba-plugins-dependencies-ppl' -or
+              [string]::IsNullOrWhiteSpace($sbom.metadata.component.version)) {
               throw 'Generated SBOM is missing the expected CycloneDX format or product identity.'
           }
+          $assetVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($assetPath)
+          $expectedVersion = [string]$sbom.metadata.component.version
+          if ([string]::IsNullOrWhiteSpace($assetVersionInfo.FileVersion) -or
+              [string]::IsNullOrWhiteSpace($assetVersionInfo.ProductVersion) -or
+              $assetVersionInfo.FileVersion -cne $expectedVersion -or
+              $assetVersionInfo.ProductVersion -cne $expectedVersion) {
+              throw "LVLIBP file version '$($assetVersionInfo.FileVersion)' and product version '$($assetVersionInfo.ProductVersion)' do not match SBOM version '$expectedVersion'."
+          }
+          $vipmInventoryJson = & vipm --labview-version 2026 --labview-bitness 64 list --installed --vipm --json
+          if ($LASTEXITCODE -ne 0) { throw "Could not inspect installed VIPM packages; vipm exited with code $LASTEXITCODE." }
+          $vipmInventory = ($vipmInventoryJson -join [Environment]::NewLine) | ConvertFrom-Json
+          $vipmPackageFiles = Get-ProducerVipmPackageFileInventory -Inventory $vipmInventory
+          $pplSourceFiles = Read-ProducerPplSourceFile -BuildLogPath $buildLogPath
+          $pplVipmPackages = Assert-ProducerSbomCoverage -Sbom $sbom -Inventory $vipmInventory `
+            -PackageFiles $vipmPackageFiles -SourceFiles $pplSourceFiles `
+            -RequiredPackages @('jdp_science_lib_common_utilities')
           $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipm.toml'
           $record = [ordered]@{
               schemaVersion = '1.0'
@@ -262,7 +291,9 @@ jobs:
                   kind = 'lvlibp'
                   buildSpec = 'lba-plugins-dependencies-ppl'
               }
-              dependencies = @()
+                dependencies = @($pplVipmPackages.GetEnumerator() | ForEach-Object {
+                  [ordered]@{ name = $_.Key; version = $_.Value }
+                })
               source = [ordered]@{
                   repository = 'svelderrainruiz/dependencies'
                   commit = $env:GITHUB_SHA
@@ -273,6 +304,8 @@ jobs:
                 }
               asset = [ordered]@{
                   fileName = [System.IO.Path]::GetFileName($assetPath)
+                  fileVersion = $assetVersionInfo.FileVersion
+                  productVersion = $assetVersionInfo.ProductVersion
                   sizeBytes = (Get-Item -LiteralPath $assetPath).Length
                   sha256 = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
               }
@@ -286,7 +319,7 @@ jobs:
           [System.IO.File]::WriteAllText($recordPath, ($record | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
 
       - name: Upload LVLIBP Candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dependencies-lvlibp-candidate-${{ github.run_id }}
           path: output/
@@ -295,7 +328,7 @@ jobs:
 
       - name: Upload PPL Failure Diagnostics
         if: failure() && steps.build.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dependencies-lvlibp-diagnostics-${{ github.run_id }}
           path: output/
