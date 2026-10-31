@@ -4,3 +4,4 @@
 *.UserState
 .vipm/config.toml
 *.exe
+*.lvprojstate
