@@ -14,7 +14,6 @@
 		<Property Name="server.vi.callsEnabled" Type="Bool">true</Property>
 		<Property Name="server.vi.propertiesEnabled" Type="Bool">true</Property>
 		<Property Name="specify.custom.address" Type="Bool">false</Property>
-		<Item Name="New Folder" Type="Folder"/>
 		<Item Name="dependencies.lvlib" Type="Library" URL="../dependencies.lvlib"/>
 		<Item Name="Dependencies" Type="Dependencies"/>
 		<Item Name="Build Specifications" Type="Build">
@@ -186,15 +185,16 @@
 				<Property Name="Bld_autoIncrement" Type="Bool">true</Property>
 				<Property Name="Bld_buildCacheID" Type="Str">{AE984EEA-69BD-4720-880E-78A836DAE0ED}</Property>
 				<Property Name="Bld_buildSpecName" Type="Str">lba-plugins-dependencies-ppl</Property>
+				<Property Name="Bld_excludeDependentDLLs" Type="Bool">true</Property>
+				<Property Name="Bld_excludeDependentPPLs" Type="Bool">true</Property>
 				<Property Name="Bld_excludeLibraryItems" Type="Bool">true</Property>
 				<Property Name="Bld_excludePolymorphicVIs" Type="Bool">true</Property>
-				<Property Name="Bld_excludeTypedefs" Type="Bool">true</Property>
 				<Property Name="Bld_localDestDir" Type="Path">/C/Users/Public/Documents/svelderrainruiz</Property>
 				<Property Name="Bld_modifyLibraryFile" Type="Bool">true</Property>
 				<Property Name="Bld_previewCacheID" Type="Str">{49E36C7A-4D0D-4691-9530-BCC325C9BE2C}</Property>
-				<Property Name="Bld_sbomFile" Type="Path">/C/Users/Public/Documents/svelderrainruiz/Dependencies_lba-plugins-dependencies-ppl.cdx.sbom.json</Property>
-				<Property Name="Bld_userLogFile" Type="Path">/C/Users/Public/Documents/svelderrainruiz/Dependencies_lba-plugins-dependencies-ppl_log.txt</Property>
-				<Property Name="Bld_version.build" Type="Int">12</Property>
+				<Property Name="Bld_sbomFile" Type="Path">/C/Users/Public/Documents/svelderrainruiz/SBOMs/Dependencies_lba-plugins-dependencies-ppl.cdx.sbom.json</Property>
+				<Property Name="Bld_userLogFile" Type="Path">/C/Users/Public/Documents/svelderrainruiz/Build Logs/Dependencies_lba-plugins-dependencies-ppl_log.txt</Property>
+				<Property Name="Bld_version.build" Type="Int">14</Property>
 				<Property Name="Bld_version.major" Type="Int">1</Property>
 				<Property Name="Destination[0].destName" Type="Str">dependencies.lvlibp</Property>
 				<Property Name="Destination[0].path" Type="Path">/C/Users/Public/Documents/svelderrainruiz/NI_AB_PROJECTNAME.lvlibp</Property>
@@ -206,7 +206,7 @@
 				<Property Name="Destination[1].path.type" Type="Str">&lt;none&gt;</Property>
 				<Property Name="DestinationCount" Type="Int">2</Property>
 				<Property Name="PackedLib_callersAdapt" Type="Bool">true</Property>
-				<Property Name="Source[0].itemID" Type="Str">{173D41DB-9867-4459-B7D9-B7BCD1197511}</Property>
+				<Property Name="Source[0].itemID" Type="Str">{DA5FA6DC-3592-4E46-B53B-0CA1CFCBB44E}</Property>
 				<Property Name="Source[0].type" Type="Str">Container</Property>
 				<Property Name="Source[1].destinationIndex" Type="Int">0</Property>
 				<Property Name="Source[1].itemID" Type="Ref">/My Computer/dependencies.lvlib</Property>
