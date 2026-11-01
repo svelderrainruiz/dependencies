@@ -78,6 +78,7 @@ if ($result.ExitCode -ne 124 -or -not $result.TimedOut -or $script:buildCalls.Co
 }
 
 $script:timeoutProcess = [pscustomobject]@{
+    Id = 1234
     ExitCode = 0
     Killed = $false
     WaitCalls = [System.Collections.Generic.List[int]]::new()
@@ -118,5 +119,9 @@ $timeoutGuard = $workflow.IndexOf('if ($buildResult.TimedOut)', [System.StringCo
 $diagnosticSbom = $workflow.IndexOf('$diagnosticSbomPath', [System.StringComparison]::Ordinal)
 if ($timeoutGuard -lt 0 -or $diagnosticSbom -lt 0 -or $timeoutGuard -gt $diagnosticSbom) {
     throw 'The producer candidate workflow must skip the diagnostic SBOM scan when VIPM times out.'
+}
+$diagnosticUploadCondition = "if: always() && (steps.build.outcome == 'failure' || steps.build.outcome == 'cancelled')"
+if (-not $workflow.Contains($diagnosticUploadCondition)) {
+    throw 'The producer candidate workflow must upload diagnostics when the build step is canceled.'
 }
 Write-Output 'PASS: producer PPL build has a bounded process wait and retries only a cold-start 1130.'
