@@ -1,0 +1,17 @@
+[project]
+name = "lbap-dependencies-fork-level"
+version = "0.1.0"
+labview-version = "2026"
+labview-bitness = "64"
+
+[dependencies]
+jdp_science_jsontext = "1.9.1.125"
+jdp_science_lib_common_utilities = "1.4.2.19"
+oglib_boolean = "6.0.0.9"
+oglib_comparison = "6.0.0.4"
+
+[build.ppl]
+type = "lvproj"
+path = "src/Dependencies.lvproj"
+spec = "lba-plugins-dependencies-ppl"
+target = "My Computer"

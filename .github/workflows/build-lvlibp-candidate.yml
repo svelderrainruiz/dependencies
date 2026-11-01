@@ -1,0 +1,366 @@
+name: Build LVLIBP Candidate
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/scripts/**
+      - .github/workflows/build-lvlibp-candidate.yml
+      - src/**
+      - tests/**
+      - vipm.toml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependencies-lvlibp-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: '1.24.x'
+
+      - name: Validate Workflow with actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/build-lvlibp-candidate.yml
+
+  source-preflight:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout Workflow Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Checkout Dependencies Source Tree
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: svelderrainruiz/dependencies
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: workspace/dependencies
+
+      - name: Test PPL SBOM Coverage
+        shell: pwsh
+        run: ./tests/Test-CandidateSbomPackage.ps1
+
+      - name: Test PPL Build Retry
+        shell: pwsh
+        run: ./tests/Test-CandidatePplBuild.ps1
+
+      - name: Validate PPL Source Closure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies'))
+          $projectPath = Join-Path $repositoryRoot 'src/Dependencies.lvproj'
+          $libraryPath = Join-Path $repositoryRoot 'src/dependencies.lvlib'
+          foreach ($path in @($projectPath, $libraryPath, (Join-Path $repositoryRoot 'vipm.toml'))) {
+              if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                  throw "Required PPL source input is missing: $path"
+              }
+          }
+          $project = [System.Xml.XmlDocument]::new()
+          $project.Load($projectPath)
+          $libraryItem = $project.SelectSingleNode("//Item[@Name='dependencies.lvlib' and @Type='Library']")
+          if (-not $libraryItem -or $libraryItem.GetAttribute('URL') -cne 'dependencies.lvlib') {
+              throw 'Dependencies.lvproj must link its adjacent dependencies.lvlib.'
+          }
+          $pplSpecs = @($project.SelectNodes("//Item[@Name='lba-plugins-dependencies-ppl' and @Type='Packed Library']"))
+          if ($pplSpecs.Count -ne 1) { throw 'Expected exactly one lba-plugins-dependencies-ppl build specification.' }
+          $autoIncrement = @($pplSpecs[0].SelectNodes("Property[@Name='Bld_autoIncrement']"))
+          if ($autoIncrement.Count -ne 1 -or $autoIncrement[0].InnerText -cne 'false') {
+              throw 'The PPL build specification must disable automatic version increment.'
+          }
+
+          $library = [System.Xml.XmlDocument]::new()
+          $library.Load($libraryPath)
+          $references = @($library.SelectNodes('//*[@URL]'))
+          foreach ($item in $references) {
+              $url = $item.GetAttribute('URL')
+              if ([System.IO.Path]::IsPathRooted($url) -or $url -match '^[A-Za-z]:') {
+                  throw "LVLIBP source contains an absolute URL: $url"
+              }
+              $sourcePath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($libraryPath, $url))
+              $relativePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $sourcePath)
+              if ([System.IO.Path]::IsPathRooted($relativePath) -or $relativePath -eq '..' -or
+                  $relativePath.StartsWith('..' + [System.IO.Path]::DirectorySeparatorChar)) {
+                  throw "LVLIBP source URL escapes the dependencies repository: $url"
+              }
+              if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                  throw "LVLIBP source URL does not resolve in the checkout: $url"
+              }
+          }
+          Write-Host "Validated $($references.Count) repository-local LVLIBP source URLs."
+
+  build-lvlibp:
+    needs: source-preflight
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 120
+    steps:
+      - name: Checkout Dependencies Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Checkout Dependencies Build Tree
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: svelderrainruiz/dependencies
+          ref: ${{ github.sha }}
+          path: workspace/dependencies
+
+      - name: Verify Windows Build Environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+              throw 'The self-hosted Windows runner must be elevated.'
+          }
+          $vipm = (& vipm version --json | ConvertFrom-Json)
+          if ($LASTEXITCODE -ne 0 -or $vipm.edition -cne 'Professional') {
+              throw 'VIPM Professional is required on the self-hosted Windows runner.'
+          }
+          $labview = (& vipm labview list --json | ConvertFrom-Json)
+          $installation = @($labview.labview_versions | Where-Object { $_.version_year -eq '2026' -and $_.bitness -eq 64 })
+          if ($LASTEXITCODE -ne 0 -or $installation.Count -ne 1) {
+              throw 'Exactly one LabVIEW 2026 64-bit installation must be available.'
+          }
+
+      - name: Prepare Isolated Build Outputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Get-Command vipm -ErrorAction SilentlyContinue)) {
+              throw 'VIPM CLI is required on the self-hosted Windows runner.'
+          }
+          $outputDirectory = Join-Path $env:GITHUB_WORKSPACE 'output'
+          if (Test-Path -LiteralPath $outputDirectory) {
+              Remove-Item -LiteralPath $outputDirectory -Recurse -Force
+          }
+          $null = New-Item -ItemType Directory -Path $outputDirectory -Force
+          "OUTPUT_DIRECTORY=$outputDirectory" >> $env:GITHUB_ENV
+
+      - name: Install PPL Build Dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipm.toml'
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+              throw "Pinned VIPM dependency manifest is missing: $manifestPath"
+          }
+          & vipm --labview-version 2026 --labview-bitness 64 install -y $manifestPath
+          if ($LASTEXITCODE -ne 0) { throw "VIPM/NIPM prerequisite installation failed with exit code $LASTEXITCODE." }
+          Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $env:OUTPUT_DIRECTORY 'vipm.toml')
+
+      - name: Build PPL and CycloneDX SBOM
+        id: build
+        shell: pwsh
+        run: |
+          . (Join-Path $env:GITHUB_WORKSPACE '.github/scripts/Assert-CandidateSbomPackage.ps1')
+          . (Join-Path $env:GITHUB_WORKSPACE '.github/scripts/Invoke-CandidatePplBuild.ps1')
+
+          function ConvertTo-LabVIEWPath {
+            param([Parameter(Mandatory = $true)][string]$Path)
+            $fullPath = [System.IO.Path]::GetFullPath($Path)
+            if ($fullPath -notmatch '^(?<drive>[A-Za-z]):\\(?<tail>.*)$') {
+              throw "LabVIEW project paths must be on a drive-letter volume: $fullPath"
+            }
+            return "/$($Matches.drive.ToUpperInvariant())/" + $Matches.tail.Replace('\', '/')
+          }
+
+          $ErrorActionPreference = 'Stop'
+          $env:VIPM_DEBUG = '1'
+          $projectPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/src/Dependencies.lvproj'
+          if (-not (Test-Path -LiteralPath $projectPath -PathType Leaf)) {
+              throw "Dependencies project was not checked out: $projectPath"
+          }
+          $project = [System.Xml.XmlDocument]::new()
+          $project.PreserveWhitespace = $true
+          $project.Load($projectPath)
+          $libraryItem = $project.SelectSingleNode("//Item[@Name='dependencies.lvlib' and @Type='Library']")
+          if (-not $libraryItem) { throw 'The dependencies.lvlib project item was not found.' }
+          $libraryPath = Join-Path (Split-Path -Parent $projectPath) 'dependencies.lvlib'
+          if (-not (Test-Path -LiteralPath $libraryPath -PathType Leaf)) {
+              throw "The tracked dependencies library is missing: $libraryPath"
+            }
+          if ($libraryItem.GetAttribute('URL') -cne 'dependencies.lvlib') {
+              throw "The PPL project must reference its adjacent dependencies.lvlib; found '$($libraryItem.GetAttribute('URL'))'."
+          }
+            $libraryDocument = [System.Xml.XmlDocument]::new()
+            $libraryDocument.Load($libraryPath)
+            $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies'))
+            foreach ($item in $libraryDocument.SelectNodes('//*[@URL]')) {
+              $url = $item.GetAttribute('URL')
+              if ([System.IO.Path]::IsPathRooted($url) -or $url -match '^[A-Za-z]:') {
+                throw "The dependencies LVLIBP source must not link to absolute paths: $url"
+              }
+              $sourcePath = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($libraryPath, $url))
+              $relativeSourcePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $sourcePath)
+              if ([System.IO.Path]::IsPathRooted($relativeSourcePath) -or $relativeSourcePath -eq '..' -or
+                $relativeSourcePath.StartsWith('..' + [System.IO.Path]::DirectorySeparatorChar)) {
+                throw "The dependencies LVLIBP source escapes its repository checkout: $url"
+              }
+              if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+                throw "A dependencies LVLIBP source file is missing: $url"
+              }
+            }
+          $spec = $project.SelectSingleNode("//Item[@Name='lba-plugins-dependencies-ppl' and @Type='Packed Library']")
+          if (-not $spec) { throw 'The PPL build specification was not found.' }
+          $properties = @{}
+          foreach ($property in $spec.SelectNodes('Property')) {
+              $properties[$property.GetAttribute('Name')] = $property
+          }
+          foreach ($requiredProperty in @('Bld_localDestDir', 'Destination[0].path', 'Destination[1].path', 'Bld_sbomFile', 'Bld_userLogFile')) {
+              if (-not $properties.ContainsKey($requiredProperty)) {
+                  throw "The PPL build specification is missing '$requiredProperty'."
+              }
+          }
+          $assetPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies.lvlibp'
+          $supportPath = Join-Path $env:OUTPUT_DIRECTORY 'support'
+          $sbomPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies.lvlibp.cdx.sbom.json'
+          $buildLogPath = Join-Path $env:OUTPUT_DIRECTORY 'dependencies-ppl-build.log'
+          $null = New-Item -ItemType Directory -Path $supportPath -Force
+          $properties['Bld_localDestDir'].InnerText = ConvertTo-LabVIEWPath $env:OUTPUT_DIRECTORY
+          $properties['Destination[0].path'].InnerText = ConvertTo-LabVIEWPath $assetPath
+          $properties['Destination[1].path'].InnerText = ConvertTo-LabVIEWPath $supportPath
+          $properties['Bld_sbomFile'].InnerText = ConvertTo-LabVIEWPath $sbomPath
+          $properties['Bld_userLogFile'].InnerText = ConvertTo-LabVIEWPath $buildLogPath
+          $project.Save($projectPath)
+
+            $buildArguments = @(
+              '--labview-version', '2026', '--labview-bitness', '64', 'build', $projectPath,
+              '--lvproj-build-spec', 'lba-plugins-dependencies-ppl', '--lvproj-target', 'My Computer'
+            )
+            $buildResult = Invoke-ProducerVipmBuild -Arguments $buildArguments -WorkingDirectory $repositoryRoot `
+              -OutputDirectory $env:OUTPUT_DIRECTORY
+            $buildExitCode = $buildResult.ExitCode
+            if ($buildResult.TimedOut) {
+              throw "VIPM PPL build timed out after $($buildResult.TimeoutSeconds) seconds."
+            }
+            if ($buildExitCode -ne 0) {
+              $diagnosticSbomPath = Join-Path $env:OUTPUT_DIRECTORY 'missing-source-diagnostics.cdx.sbom.json'
+              & vipm --labview-version 2026 --labview-bitness 64 sbom $projectPath `
+                --format cyclonedx --schema-version 1.5 `
+                --lvproj-build-spec 'lba-plugins-dependencies-ppl' `
+                --allow-missing-files --output $diagnosticSbomPath
+              if ($LASTEXITCODE -ne 0) {
+                Write-Warning "VIPM diagnostic SBOM scan also failed with exit code $LASTEXITCODE."
+              }
+              throw "VIPM PPL build failed with exit code $buildExitCode."
+            }
+          if (-not (Test-Path -LiteralPath $assetPath -PathType Leaf)) {
+              throw "VIPM build did not produce '$assetPath'."
+          }
+
+          & vipm --labview-version 2026 --labview-bitness 64 sbom $projectPath `
+              --format cyclonedx --schema-version 1.5 `
+              --lvproj-build-spec 'lba-plugins-dependencies-ppl' --output $sbomPath
+          if ($LASTEXITCODE -ne 0) { throw "VIPM SBOM generation failed with exit code $LASTEXITCODE." }
+          if (-not (Test-Path -LiteralPath $sbomPath -PathType Leaf)) {
+              throw "VIPM SBOM generation did not produce '$sbomPath'."
+          }
+
+          $sbom = Get-Content -LiteralPath $sbomPath -Raw -Encoding utf8 | ConvertFrom-Json
+          if ($sbom.bomFormat -cne 'CycloneDX' -or $sbom.specVersion -cne '1.5' -or
+              $sbom.metadata.component.name -cne 'lba-plugins-dependencies-ppl' -or
+              [string]::IsNullOrWhiteSpace($sbom.metadata.component.version)) {
+              throw 'Generated SBOM is missing the expected CycloneDX format or product identity.'
+          }
+          $assetVersionInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($assetPath)
+          $expectedVersion = [string]$sbom.metadata.component.version
+          if ([string]::IsNullOrWhiteSpace($assetVersionInfo.FileVersion) -or
+              [string]::IsNullOrWhiteSpace($assetVersionInfo.ProductVersion) -or
+              $assetVersionInfo.FileVersion -cne $expectedVersion -or
+              $assetVersionInfo.ProductVersion -cne $expectedVersion) {
+              throw "LVLIBP file version '$($assetVersionInfo.FileVersion)' and product version '$($assetVersionInfo.ProductVersion)' do not match SBOM version '$expectedVersion'."
+          }
+          $vipmInventoryJson = & vipm --labview-version 2026 --labview-bitness 64 list --installed --json
+          if ($LASTEXITCODE -ne 0) { throw "Could not inspect installed VIPM packages; vipm exited with code $LASTEXITCODE." }
+          $vipmInventory = ($vipmInventoryJson -join [Environment]::NewLine) | ConvertFrom-Json
+          $vipmPackageFiles = Get-ProducerVipmPackageFileInventory -Inventory $vipmInventory
+          $pplSourceFiles = Read-ProducerPplSourceFile -BuildLogPath $buildLogPath
+          $manifestPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipm.toml'
+          $pplVipmPackages = Get-ProducerPplVipmSourcePackage -Inventory $vipmInventory `
+            -PackageFiles $vipmPackageFiles -SourceFiles $pplSourceFiles `
+            -RequiredPackages @('jdp_science_lib_common_utilities')
+          $manifestSbomPath = Join-Path $env:OUTPUT_DIRECTORY 'vipm-manifest.cdx.sbom.json'
+          & vipm --labview-version 2026 --labview-bitness 64 sbom $manifestPath `
+              --format cyclonedx --schema-version 1.5 --no-dev --output $manifestSbomPath
+          if ($LASTEXITCODE -ne 0) { throw "VIPM manifest SBOM generation failed with exit code $LASTEXITCODE." }
+          if (-not (Test-Path -LiteralPath $manifestSbomPath -PathType Leaf)) {
+              throw "VIPM manifest SBOM generation did not produce '$manifestSbomPath'."
+          }
+          $manifestSbom = Get-Content -LiteralPath $manifestSbomPath -Raw -Encoding utf8 | ConvertFrom-Json
+          Merge-ProducerSbomVipmSourceComponent -Sbom $sbom -ManifestSbom $manifestSbom `
+              -SourcePackages $pplVipmPackages | Out-Null
+          Assert-ProducerSbomCoverage -Sbom $sbom -Inventory $vipmInventory -PackageFiles $vipmPackageFiles `
+              -SourceFiles $pplSourceFiles -RequiredPackages @('jdp_science_lib_common_utilities') | Out-Null
+          [System.IO.File]::WriteAllText($sbomPath, ($sbom | ConvertTo-Json -Depth 100), [System.Text.UTF8Encoding]::new($false))
+          $record = [ordered]@{
+              schemaVersion = '1.0'
+              product = [ordered]@{
+                  name = $sbom.metadata.component.name
+                  version = $sbom.metadata.component.version
+                  kind = 'lvlibp'
+                  buildSpec = 'lba-plugins-dependencies-ppl'
+              }
+                dependencies = @($pplVipmPackages.GetEnumerator() | ForEach-Object {
+                    [ordered]@{ name = $_.Key; version = $_.Value.version; sourceFiles = @($_.Value.sourceFiles) }
+                })
+              source = [ordered]@{
+                  repository = 'svelderrainruiz/dependencies'
+                  commit = $env:GITHUB_SHA
+              }
+              dependencyManifest = [ordered]@{
+                  fileName = 'vipm.toml'
+                  sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+                manifestSbom = [ordered]@{
+                  fileName = [System.IO.Path]::GetFileName($manifestSbomPath)
+                  sizeBytes = (Get-Item -LiteralPath $manifestSbomPath).Length
+                  sha256 = (Get-FileHash -LiteralPath $manifestSbomPath -Algorithm SHA256).Hash.ToLowerInvariant()
+                }
+              asset = [ordered]@{
+                  fileName = [System.IO.Path]::GetFileName($assetPath)
+                  fileVersion = $assetVersionInfo.FileVersion
+                  productVersion = $assetVersionInfo.ProductVersion
+                  sizeBytes = (Get-Item -LiteralPath $assetPath).Length
+                  sha256 = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+              sbom = [ordered]@{
+                  fileName = [System.IO.Path]::GetFileName($sbomPath)
+                  sizeBytes = (Get-Item -LiteralPath $sbomPath).Length
+                  sha256 = (Get-FileHash -LiteralPath $sbomPath -Algorithm SHA256).Hash.ToLowerInvariant()
+              }
+          }
+          $recordPath = Join-Path $env:OUTPUT_DIRECTORY 'lvlibp-build-record.json'
+          [System.IO.File]::WriteAllText($recordPath, ($record | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
+
+      - name: Upload LVLIBP Candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dependencies-lvlibp-candidate-${{ github.run_id }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload PPL Failure Diagnostics
+        if: always() && (steps.build.outcome == 'failure' || steps.build.outcome == 'cancelled')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dependencies-lvlibp-diagnostics-${{ github.run_id }}
+          path: output/
+          if-no-files-found: warn
+          retention-days: 3
