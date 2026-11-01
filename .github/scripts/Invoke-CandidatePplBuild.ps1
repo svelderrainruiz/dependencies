@@ -16,6 +16,7 @@ function Invoke-ProducerVipmBuildOnce {
     $stderrPath = Join-Path $OutputDirectory "vipm-build-attempt-$Attempt.stderr.log"
     $process = Start-Process -FilePath $vipmPath -ArgumentList $argumentLine -WorkingDirectory $WorkingDirectory -NoNewWindow `
         -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru
+    Write-Information "Waiting up to $TimeoutSeconds seconds for VIPM PPL build process $($process.Id)." -InformationAction Continue
     $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
     if ($timedOut) {
         Write-Warning "VIPM PPL build exceeded its $TimeoutSeconds-second timeout; terminating the VIPM process tree."
@@ -27,10 +28,11 @@ function Invoke-ProducerVipmBuildOnce {
         }
     }
     $exitCode = if ($timedOut) { 124 } else { $process.ExitCode }
+    Write-Information "VIPM PPL build wait finished: timedOut=$timedOut exitCode=$exitCode." -InformationAction Continue
     $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath -Raw } else { '' }
     $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -LiteralPath $stderrPath -Raw } else { '' }
     $output = @($stdout, $stderr | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join [Environment]::NewLine
-    if (-not [string]::IsNullOrWhiteSpace($output)) { Write-Host $output }
+    if (-not [string]::IsNullOrWhiteSpace($output)) { Write-Information $output -InformationAction Continue }
     return [pscustomobject]@{
         ExitCode = $exitCode
         Output = $output
