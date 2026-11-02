@@ -68,4 +68,16 @@ $workflow = [System.IO.File]::ReadAllText((Join-Path $root '.github/workflows/bu
 if (-not $workflow.Contains("Invoke-ProducerVipmBuild -Arguments `$buildArguments")) {
     throw 'The producer candidate workflow must use the bounded build helper.'
 }
+if (-not $workflow.Contains('if ($buildResult.TimedOut)')) {
+    throw 'The producer candidate workflow must surface a timed-out VIPM build distinctly from a generic failure.'
+}
 Write-Output 'PASS: producer PPL build retry is restricted to one cold-start 1130 retry.'
+
+$script:buildCalls.Clear()
+$script:responses = @([pscustomobject]@{ ExitCode = 124; Output = ''; LogPaths = @(); TimedOut = $true; TimeoutSeconds = 1800 })
+$script:labviewRunning = $true
+$result = Invoke-ProducerVipmBuild -Arguments $arguments -WorkingDirectory 'fixture' -OutputDirectory 'output'
+if (-not $result.TimedOut -or $result.ExitCode -ne 124 -or $script:buildCalls.Count -ne 1) {
+    throw 'A timed-out VIPM build must not be treated as a retryable cold-start 1130 failure.'
+}
+Write-Output 'PASS: a timed-out VIPM build is returned immediately without a cold-start retry.'

@@ -246,6 +246,9 @@ jobs:
             $buildResult = Invoke-ProducerVipmBuild -Arguments $buildArguments -WorkingDirectory $repositoryRoot `
               -OutputDirectory $env:OUTPUT_DIRECTORY
             $buildExitCode = $buildResult.ExitCode
+            if ($buildResult.TimedOut) {
+              throw "VIPM PPL build timed out after $($buildResult.TimeoutSeconds) seconds."
+            }
             if ($buildExitCode -ne 0) {
               $diagnosticSbomPath = Join-Path $env:OUTPUT_DIRECTORY 'missing-source-diagnostics.cdx.sbom.json'
               & vipm --labview-version 2026 --labview-bitness 64 sbom $projectPath `
