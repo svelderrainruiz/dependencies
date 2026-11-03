@@ -1,0 +1,33 @@
+name: Runner Health Check
+
+# Proves the self-hosted Windows runner for this repo is online and can
+# execute a real job -- deliberately does NOT touch VIPM/LabVIEW (that
+# requires the separate, permanently-manual operator activation step; see
+# VITechnologies/SandboxSBOMReporting#217). This is the runner-health proof
+# required by VITechnologies/SandboxSBOMReporting#205's acceptance criteria.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health-check:
+    runs-on: [self-hosted, windows, windows-labview2026]
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Inspect Runner Environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Output "Computer name: $env:COMPUTERNAME"
+          Write-Output "OS: $((Get-CimInstance Win32_OperatingSystem).Caption)"
+          Write-Output "Runner name: $env:RUNNER_NAME"
+          Write-Output "Runner OS: $env:RUNNER_OS"
+          $disk = Get-PSDrive -Name C
+          Write-Output "C: free space: $([math]::Round($disk.Free / 1GB, 1)) GiB"
+          Write-Output 'Runner health check passed.'
