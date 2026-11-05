@@ -164,6 +164,56 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "VIPM/NIPM prerequisite installation failed with exit code $LASTEXITCODE." }
           Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $env:OUTPUT_DIRECTORY 'vipm.toml')
 
+      - name: Mass-Compile Dependencies Project (NI CAR#705294 mitigation)
+        # Pre-build, non-fatal warming step for SandboxSBOMReporting#262's
+        # "Call By Reference in lv_build.lvlib:build_project.vi.ProxyCaller"
+        # (LabVIEWCLI error 1130, NI CAR#705294). Mirrors the headless
+        # LabVIEWCLI MassCompile pattern from ni/LabVIEW-CI-CD-Toolkit's own
+        # 'masscompile' action -- a fully scriptable equivalent of NI's
+        # documented interactive-IDE workaround (force-recompile all VIs,
+        # Save All), with no GUI automation and no need to commit recompiled
+        # binary VI files back to source control, since this runs fresh on
+        # every build.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $projectRoot = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/src'
+          if (-not (Test-Path -LiteralPath $projectRoot -PathType Container)) {
+              throw "Dependencies source directory was not checked out: $projectRoot"
+          }
+          $labviewDir = Get-ChildItem 'C:\Program Files\National Instruments' -Directory -Filter 'LabVIEW *' -ErrorAction SilentlyContinue |
+              Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $labviewDir) {
+              throw 'No LabVIEW installation found under C:\Program Files\National Instruments.'
+          }
+          $labviewExe = Join-Path $labviewDir.FullName 'LabVIEW.exe'
+          if (-not (Test-Path -LiteralPath $labviewExe -PathType Leaf)) {
+              throw "LabVIEW.exe not found at expected path: $labviewExe"
+          }
+          $cliCommand = Get-Command LabVIEWCLI.exe -ErrorAction SilentlyContinue
+          $cliExe = if ($cliCommand) { $cliCommand.Source } else { Join-Path $labviewDir.FullName 'LabVIEWCLI.exe' }
+          if (-not (Test-Path -LiteralPath $cliExe -PathType Leaf)) {
+              throw "LabVIEWCLI.exe not found (checked PATH and '$cliExe')."
+          }
+          $logPath = Join-Path $env:OUTPUT_DIRECTORY 'masscompile.log'
+          Write-Output "Mass-compiling $projectRoot with $labviewExe ..."
+
+          # LabVIEWCLI writes its own operation output to stderr; relax
+          # ErrorActionPreference so merging it with 2>&1 does not raise a
+          # terminating NativeCommandError (same gotcha ni's own masscompile.ps1
+          # documents). This step's own exit code is deliberately NOT checked --
+          # MassCompile legitimately reports individual VIs that depend on
+          # libraries absent from this environment as failed without that
+          # indicating a real problem (ni's own toolkit documents the same
+          # per-VI, not whole-operation, pass/fail semantics). The actual build
+          # validation remains the next step's real PPL build.
+          $prevEAP = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
+          & $cliExe -LogToConsole TRUE -OperationName MassCompile -DirectoryToCompile $projectRoot -LabVIEWPath $labviewExe -Headless 2>&1 |
+              Tee-Object -FilePath $logPath
+          $ErrorActionPreference = $prevEAP
+          Write-Output "Mass compile finished (exit code $LASTEXITCODE, non-fatal); log: $logPath"
+
       - name: Build PPL and CycloneDX SBOM
         id: build
         shell: pwsh
