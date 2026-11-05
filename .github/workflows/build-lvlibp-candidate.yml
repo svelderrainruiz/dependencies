@@ -11,6 +11,17 @@ on:
       - tests/**
       - vipm.toml
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: >-
+          Publish the built .vip as an immutable GitHub Release asset
+          (tag vip-vMAJOR.MINOR.PATCH, sourced from vipb.vipb's
+          Library_Version). Leave false for ordinary/test dispatches --
+          this org has immutable releases enabled, so published tags can
+          never be reused. Bump Library_Version before publishing again.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -454,15 +465,17 @@ jobs:
   # PPL built by build-lvlibp above. Consumer repos (usereventrecorder,
   # core, replay) are intended to eventually `vipm install` this artifact
   # directly -- see docs/vipm-dependency-chaining.md in SandboxSBOMReporting.
-  # Publishing the built .vip as an immutable GitHub Release asset is a
-  # deliberately separate, not-yet-wired follow-up (see that doc) since it
-  # requires a tagging/versioning policy decision this job should not make
-  # unilaterally.
+  # When inputs.publish_release is true, also publishes the .vip as an
+  # immutable GitHub Release (tag vip-vMAJOR.MINOR.PATCH, SemVer 2.0,
+  # sourced from vipb.vipb's Library_Version) -- draft, verify, then
+  # publish, matching this org's immutable-release convention.
   build-vip:
     needs: source-preflight
     if: github.event_name == 'workflow_dispatch'
     runs-on: [self-hosted, windows]
     timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - name: Checkout Dependencies Repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -514,3 +527,111 @@ jobs:
           path: ${{ env.VIP_PATH }}
           if-no-files-found: error
           retention-days: 90
+
+      - name: Compute Release Tag (SemVer 2.0)
+        if: ${{ inputs.publish_release }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # The release tag is pure SemVer 2.0 (MAJOR.MINOR.PATCH only) so
+          # tag precedence/comparison stays meaningful; this is distinct
+          # from the .vip file's own 4-component VIPM-style version (set
+          # above via --build-number), which is an unrelated convention.
+          $vipbPath = Join-Path $env:GITHUB_WORKSPACE 'vipb.vipb'
+          [xml]$vipb = Get-Content -LiteralPath $vipbPath -Raw
+          $libraryVersion = $vipb.SelectSingleNode('//Library_Version').InnerText
+          $parts = $libraryVersion.Split('.')
+          if ($parts.Count -lt 3) {
+              throw "vipb.vipb's Library_Version '$libraryVersion' does not have at least 3 components."
+          }
+          $semver = "$($parts[0]).$($parts[1]).$($parts[2])"
+          $tag = "vip-v$semver"
+          "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
+          "RELEASE_SEMVER=$semver" >> $env:GITHUB_ENV
+          Write-Host "Release tag will be $tag"
+
+      - name: Reject Already-Published Tag
+        if: ${{ inputs.publish_release }}
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
+          $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG"
+          try {
+              $null = Invoke-RestMethod -Headers $headers -Uri $uri -Method Get
+              throw "Release tag '$env:RELEASE_TAG' already exists. Immutable releases are enabled for this org -- this tag can never be reused. Bump vipb.vipb's Library_Version before publishing again."
+          } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
+              if ($_.Exception.Response.StatusCode -ne [System.Net.HttpStatusCode]::NotFound) { throw }
+              Write-Host "Tag '$env:RELEASE_TAG' is available."
+          }
+
+      - name: Create Draft Release
+        id: create_release
+        if: ${{ inputs.publish_release }}
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
+          $body = @{
+              tag_name = $env:RELEASE_TAG
+              target_commitish = $env:GITHUB_SHA
+              name = $env:RELEASE_TAG
+              body = "Producer artifact for issue #263 (VITechnologies/SandboxSBOMReporting). Built from commit $env:GITHUB_SHA, CI run $env:GITHUB_RUN_ID (run number $env:GITHUB_RUN_NUMBER). SHA256: $env:VIP_SHA256"
+              draft = $true
+              prerelease = $false
+          } | ConvertTo-Json
+          $release = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases" -Method Post -Body $body -ContentType 'application/json'
+          "RELEASE_ID=$($release.id)" >> $env:GITHUB_ENV
+          "UPLOAD_URL=$($release.upload_url -replace '\{\?name,label\}','')" >> $env:GITHUB_ENV
+          Write-Host "Created draft release id $($release.id) for tag $env:RELEASE_TAG"
+
+      - name: Upload and Verify Release Asset
+        if: ${{ inputs.publish_release }}
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fileName = [System.IO.Path]::GetFileName($env:VIP_PATH)
+          $uploadHeaders = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json'; 'Content-Type' = 'application/octet-stream' }
+          $fileBytes = [System.IO.File]::ReadAllBytes($env:VIP_PATH)
+          $asset = Invoke-RestMethod -Headers $uploadHeaders -Uri "$($env:UPLOAD_URL)?name=$fileName" -Method Post -Body $fileBytes
+          if ($asset.size -ne $fileBytes.Length) {
+              throw "Uploaded asset size ($($asset.size)) does not match local file size ($($fileBytes.Length))."
+          }
+
+          $verifyPath = Join-Path $env:RUNNER_TEMP 'release-asset-verify.vip'
+          $downloadHeaders = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/octet-stream' }
+          Invoke-WebRequest -Headers $downloadHeaders -Uri $asset.url -OutFile $verifyPath
+          $downloadedHash = (Get-FileHash -LiteralPath $verifyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          Remove-Item -LiteralPath $verifyPath -Force
+          if ($downloadedHash -ne $env:VIP_SHA256) {
+              throw "Downloaded asset SHA256 ($downloadedHash) does not match the built file's SHA256 ($env:VIP_SHA256)."
+          }
+          Write-Host "Verified uploaded asset round-trips to the same SHA256."
+
+      - name: Publish Release
+        if: ${{ inputs.publish_release }}
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
+          $body = @{ draft = $false } | ConvertTo-Json
+          $null = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID" -Method Patch -Body $body -ContentType 'application/json'
+          Write-Host "Published release $env:RELEASE_TAG"
+
+      - name: Delete Unpublished Draft Release
+        if: ${{ inputs.publish_release && failure() && env.RELEASE_ID != '' }}
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
+          Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID" -Method Delete
+          Write-Host "Deleted unpublished draft release id $env:RELEASE_ID after a later step failed."
