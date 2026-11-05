@@ -447,3 +447,70 @@ jobs:
           path: output/
           if-no-files-found: warn
           retention-days: 3
+
+  # Producer side of issue #263's dependency-chaining foundation: packages
+  # this repo's LabVIEW source (src/) as an installable VI Package via
+  # vipb.vipb / vipm.toml's [build.vip] entry, independent of the compiled
+  # PPL built by build-lvlibp above. Consumer repos (usereventrecorder,
+  # core, replay) are intended to eventually `vipm install` this artifact
+  # directly -- see docs/vipm-dependency-chaining.md in SandboxSBOMReporting.
+  # Publishing the built .vip as an immutable GitHub Release asset is a
+  # deliberately separate, not-yet-wired follow-up (see that doc) since it
+  # requires a tagging/versioning policy decision this job should not make
+  # unilaterally.
+  build-vip:
+    needs: source-preflight
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout Dependencies Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Verify Windows Build Environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vipm = (& vipm version --json | ConvertFrom-Json)
+          if ($LASTEXITCODE -ne 0 -or $vipm.edition -cne 'Professional') {
+              throw 'VIPM Professional is required on the self-hosted Windows runner.'
+          }
+          $labview = (& vipm labview list --json | ConvertFrom-Json)
+          $installation = @($labview.labview_versions | Where-Object { $_.version_year -eq '2026' -and $_.bitness -eq 64 })
+          if ($LASTEXITCODE -ne 0 -or $installation.Count -ne 1) {
+              throw 'Exactly one LabVIEW 2026 64-bit installation must be available.'
+          }
+
+      - name: Build dependencies .vip candidate
+        id: build_vip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vipbPath = Join-Path $env:GITHUB_WORKSPACE 'vipb.vipb'
+          if (-not (Test-Path -LiteralPath $vipbPath -PathType Leaf)) {
+              throw "vipb.vipb spec is missing: $vipbPath"
+          }
+          $outputDirectory = Join-Path $env:GITHUB_WORKSPACE 'builds'
+          if (Test-Path -LiteralPath $outputDirectory) {
+              Remove-Item -LiteralPath $outputDirectory -Recurse -Force
+          }
+
+          & vipm --labview-version 2026 --labview-bitness 64 build $vipbPath --build-number ${{ github.run_number }}
+          if ($LASTEXITCODE -ne 0) { throw "vipm build failed with exit code $LASTEXITCODE." }
+
+          $vipFile = Get-ChildItem -LiteralPath $outputDirectory -Filter '*.vip' -File |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $vipFile) { throw "vipm build did not produce a .vip file in $outputDirectory." }
+
+          $hash = (Get-FileHash -LiteralPath $vipFile.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "VIP_PATH=$($vipFile.FullName)" >> $env:GITHUB_ENV
+          "VIP_SHA256=$hash" >> $env:GITHUB_ENV
+          Write-Host "Built $($vipFile.Name) (sha256=$hash)"
+
+      - name: Upload dependencies .vip candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dependencies-vip-candidate-${{ github.run_id }}
+          path: ${{ env.VIP_PATH }}
+          if-no-files-found: error
+          retention-days: 90
