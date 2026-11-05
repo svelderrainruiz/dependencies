@@ -196,6 +196,21 @@ jobs:
               throw "LabVIEWCLI.exe not found (checked PATH and '$cliExe')."
           }
           $logPath = Join-Path $env:OUTPUT_DIRECTORY 'masscompile.log'
+
+          # Confirmed live: LabVIEWCLI's MassCompile treats Dependencies.lvproj
+          # itself as a processed item (it appears in the operation's own
+          # "Directory: ..." listing) and re-saves it with a "corrected"
+          # dependencies.lvlib URL that is actually WRONG for this layout
+          # ('../dependencies.lvlib' instead of the required plain
+          # 'dependencies.lvlib') -- which then fails the next step's own
+          # "must reference its adjacent dependencies.lvlib" check. The
+          # project file is just the compile closure's anchor; MassCompile's
+          # real value is refreshing each VI's own embedded compiled code, so
+          # back up the project file and restore it verbatim afterward,
+          # discarding only the save MassCompile made to it (never the VIs).
+          $projectPath = Join-Path $projectRoot 'Dependencies.lvproj'
+          $projectBackupPath = Join-Path $env:OUTPUT_DIRECTORY 'Dependencies.lvproj.before-masscompile'
+          Copy-Item -LiteralPath $projectPath -Destination $projectBackupPath -Force
           Write-Output "Mass-compiling $projectRoot with $labviewExe ..."
 
           # LabVIEWCLI writes its own operation output to stderr; relax
@@ -220,6 +235,16 @@ jobs:
           # intent actually takes effect (confirmed live: without this, the
           # step failed and skipped the real build even though MassCompile's
           # own per-VI "Bad VI" results are expected, non-blocking noise).
+
+          # Restore the project file verbatim (see the comment above the
+          # backup line): confirmed live MassCompile rewrites
+          # Dependencies.lvproj's dependencies.lvlib URL to '../dependencies.lvlib',
+          # which fails the next step's own adjacency check. Only the project
+          # wrapper is reverted -- the VIs' own refreshed compiled code (the
+          # actual point of this step) lives in the .vi files themselves and
+          # is untouched by this restore.
+          Copy-Item -LiteralPath $projectBackupPath -Destination $projectPath -Force
+          Remove-Item -LiteralPath $projectBackupPath -Force
           exit 0
 
       - name: Build PPL and CycloneDX SBOM
