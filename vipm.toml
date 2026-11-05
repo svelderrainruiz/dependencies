@@ -15,3 +15,7 @@ type = "lvproj"
 path = "src/Dependencies.lvproj"
 spec = "lba-plugins-dependencies-ppl"
 target = "My Computer"
+
+[build.vip]
+type = "vipb"
+path = "vipb.vipb"
