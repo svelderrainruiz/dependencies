@@ -211,8 +211,16 @@ jobs:
           $ErrorActionPreference = 'Continue'
           & $cliExe -LogToConsole TRUE -OperationName MassCompile -DirectoryToCompile $projectRoot -LabVIEWPath $labviewExe -Headless 2>&1 |
               Tee-Object -FilePath $logPath
+          $massCompileExitCode = $LASTEXITCODE
           $ErrorActionPreference = $prevEAP
-          Write-Output "Mass compile finished (exit code $LASTEXITCODE, non-fatal); log: $logPath"
+          Write-Output "Mass compile finished (exit code $massCompileExitCode, non-fatal); log: $logPath"
+          # GitHub Actions' pwsh step wrapper fails the step on a non-zero
+          # $LASTEXITCODE at script end, regardless of any internal handling
+          # above -- explicitly normalize it so this step's own non-fatal
+          # intent actually takes effect (confirmed live: without this, the
+          # step failed and skipped the real build even though MassCompile's
+          # own per-VI "Bad VI" results are expected, non-blocking noise).
+          exit 0
 
       - name: Build PPL and CycloneDX SBOM
         id: build
