@@ -22,6 +22,17 @@ on:
         required: false
         type: boolean
         default: false
+      publish_nipkg_feed:
+        description: >-
+          Pack src/ as an NI Package (.nipkg) and publish/update it in the
+          gh-pages-hosted NIPM feed (https://svelderrainruiz.github.io/dependencies/feed/).
+          See issue #263 (vipm.toml's [nipm.dependencies] consumption model).
+          Leave false for ordinary/test dispatches -- this updates a
+          long-lived branch other repos' vipm.toml [nipm.feeds] may already
+          point at.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -635,3 +646,132 @@ jobs:
           $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = 'application/vnd.github+json' }
           Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/$env:RELEASE_ID" -Method Delete
           Write-Host "Deleted unpublished draft release id $env:RELEASE_ID after a later step failed."
+
+  publish-nipkg-feed:
+    # Producer-side half of issue #263's NIPM consumption model: packs src/
+    # as an NI Package (.nipkg, "file" plugin, installs under
+    # ProgramFiles\LabVIEW Benchmark Actor\dependencies) and publishes/updates
+    # it in the gh-pages-hosted feed at
+    # https://svelderrainruiz.github.io/dependencies/feed/ -- consuming repos
+    # register this URL in their own vipm.toml's [nipm.feeds] and declare
+    # [nipm.dependencies] entries by package name/version. Mechanism
+    # (control-file schema, feed-create/feed-add-pkg behavior) verified live
+    # end-to-end (pack -> feed-create -> feed-add -> install) before being
+    # encoded here.
+    needs: source-preflight
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_nipkg_feed
+    runs-on: [self-hosted, windows]
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Dependencies Repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: workspace/dependencies
+
+      - name: Checkout gh-pages Branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: gh-pages
+          path: workspace/gh-pages
+
+      - name: Determine Package Version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vipbPath = Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/vipb.vipb'
+          [xml]$vipb = Get-Content -LiteralPath $vipbPath -Raw
+          $version = $vipb.SelectSingleNode('//Library_Version').InnerText
+          "PKG_VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Build NI Package (.nipkg) from src/
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nipkg = 'C:\Program Files\National Instruments\NI Package Manager\nipkg.exe'
+          $pkgName = 'lbap-dependencies-sd'
+          $stageRoot = Join-Path $env:RUNNER_TEMP "$pkgName-stage"
+          if (Test-Path -LiteralPath $stageRoot) { Remove-Item -LiteralPath $stageRoot -Recurse -Force }
+          $pkgRoot = Join-Path $stageRoot $pkgName
+          $dataDir = Join-Path $pkgRoot 'data\ProgramFiles\LabVIEW Benchmark Actor\dependencies'
+          New-Item -ItemType Directory -Path (Join-Path $pkgRoot 'control') -Force | Out-Null
+          New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $pkgRoot 'debian-binary') -Value "2.0`n" -NoNewline
+
+          # Real control-file schema confirmed by unpacking an actual
+          # installed package (jki-dragon) on the self-hosted runner --
+          # Maintainer is required despite not being documented as such.
+          # A PowerShell here-string's closing "@ must start at column 0,
+          # which conflicts with this YAML block scalar's required
+          # indentation -- build the control file as a line array instead.
+          $controlLines = @(
+              'Architecture: windows_x64',
+              'CompatibilityVersion: 200003',
+              'Description: Source Distribution (src/) of svelderrainruiz/dependencies, packaged as an NI Package. See VITechnologies/SandboxSBOMReporting#263.',
+              'DisplayName: LBA Plugins Dependencies (Source Distribution)',
+              "DisplayVersion: $env:PKG_VERSION",
+              'Homepage: https://github.com/svelderrainruiz/dependencies',
+              'Maintainer: LabVIEW Benchmark Actor <noreply@github.com>',
+              "Package: $pkgName",
+              'Plugin: file',
+              'Priority: standard',
+              'Section: Application Software',
+              'UserVisible: yes',
+              "Version: $env:PKG_VERSION"
+          )
+          Set-Content -LiteralPath (Join-Path $pkgRoot 'control\control') -Value $controlLines
+
+          Copy-Item -Path (Join-Path $env:GITHUB_WORKSPACE 'workspace/dependencies/src/*') -Destination $dataDir -Recurse -Force
+
+          $outDir = Join-Path $env:RUNNER_TEMP "$pkgName-out"
+          if (Test-Path -LiteralPath $outDir) { Remove-Item -LiteralPath $outDir -Recurse -Force }
+          New-Item -ItemType Directory -Path $outDir | Out-Null
+          & $nipkg pack $pkgRoot $outDir
+          if ($LASTEXITCODE -ne 0) { throw "nipkg pack failed with exit code $LASTEXITCODE." }
+          $nipkgFile = Get-ChildItem -LiteralPath $outDir -Filter '*.nipkg' -File | Select-Object -First 1
+          if (-not $nipkgFile) { throw "nipkg pack did not produce a .nipkg file in $outDir." }
+          "NIPKG_PATH=$($nipkgFile.FullName)" >> $env:GITHUB_ENV
+          "NIPKG_NAME=$($nipkgFile.Name)" >> $env:GITHUB_ENV
+          Write-Host "Built $($nipkgFile.Name)"
+
+      - name: Update NIPM Feed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $nipkg = 'C:\Program Files\National Instruments\NI Package Manager\nipkg.exe'
+          $feedDir = Join-Path $env:GITHUB_WORKSPACE 'workspace/gh-pages/feed'
+          if (-not (Test-Path -LiteralPath $feedDir)) {
+              New-Item -ItemType Directory -Path $feedDir -Force | Out-Null
+          }
+          Copy-Item -LiteralPath $env:NIPKG_PATH -Destination $feedDir -Force
+
+          # feed-create overwrites the whole feed from its packages-dir
+          # contents -- only safe to call on a never-yet-created feed. Every
+          # subsequent update (an existing Packages manifest) must use
+          # feed-add-pkg instead, which adds/updates a single package in
+          # place (confirmed live via pack -> feed-create -> feed-add-pkg ->
+          # install round-trip).
+          $hasExistingManifest = Test-Path -LiteralPath (Join-Path $feedDir 'Packages')
+          if ($hasExistingManifest) {
+              & $nipkg feed-add-pkg $feedDir (Join-Path $feedDir $env:NIPKG_NAME)
+          } else {
+              & $nipkg feed-create $feedDir
+          }
+          if ($LASTEXITCODE -ne 0) { throw "nipkg feed-create/feed-add-pkg failed with exit code $LASTEXITCODE." }
+
+      - name: Commit and Push Feed Update
+        shell: pwsh
+        working-directory: workspace/gh-pages
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add feed
+          $status = git status --porcelain
+          if (-not $status) {
+              Write-Host 'No feed changes to commit (package already up to date).'
+              exit 0
+          }
+          git commit -m "Publish $env:NIPKG_NAME to the NIPM feed"
+          git push origin gh-pages
