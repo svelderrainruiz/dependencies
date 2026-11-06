@@ -1,0 +1,18 @@
+﻿Architecture: windows_x64
+CompatibilityVersion: 200003
+Description: Source Distribution (src/) of svelderrainruiz/dependencies, packaged as an NI Package. See VITechnologies/SandboxSBOMReporting#263.
+DisplayName: LBA Plugins Dependencies (Source Distribution)
+DisplayVersion: 1.0.0.1
+Filename: lbap-dependencies-sd_1.0.0.1_windows_x64.nipkg
+Homepage: https://github.com/svelderrainruiz/dependencies
+MD5sum: 521818cae4564a67af83ed52898964ee
+Maintainer: LabVIEW Benchmark Actor <noreply@github.com>
+Package: lbap-dependencies-sd
+Plugin: file
+Priority: standard
+SHA256: 0f6c80b8a75bf83033ccf04e65a5e075acd99b386f1cc9612935abd60cf7da6b
+Section: Application Software
+Size: 287442
+UserVisible: yes
+Version: 1.0.0.1
+
